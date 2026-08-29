@@ -1,0 +1,22 @@
+# Build output
+build/
+out/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.log
+
+# Third-party sources are cloned, not vendored - see the Build section of the
+# README for the two git clone lines that populate this directory.
+deps/
+
+# Editors and CMake scratch
+.vs/
+.idea/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
