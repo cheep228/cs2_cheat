@@ -4,7 +4,7 @@
 //
 // Each main tab lives in its own translation unit and knows nothing about the
 // window, the tab strip or the style - it just fills the content region with
-// skeet:: widgets. menu.cpp owns the chrome and dispatches here.
+// theme:: widgets. menu.cpp owns the chrome and dispatches here.
 namespace ui {
 
 struct SubTabs {

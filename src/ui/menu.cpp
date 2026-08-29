@@ -4,12 +4,15 @@
 
 #include "core/globals.h"
 #include "ui/menu.h"
-#include "ui/skeet.h"
 #include "ui/tabs.h"
+#include "ui/theme.h"
 
-// Window chrome and tab dispatch. Everything visual lives in ui/skeet.cpp and
+// Window chrome and tab dispatch. Everything visual lives in ui/theme.cpp and
 // every control lives in ui/tab_*.cpp; this file is the seam between them and
 // should stay small enough to read in one go.
+//
+// Layout follows neverlose: a fixed sidebar on the left carries the main tabs,
+// the content area on the right carries a sub-tab row and the groupboxes.
 namespace {
 
 struct TabDef {
@@ -46,14 +49,15 @@ void DrawWatermark() {
 
     ImDrawList* d = ImGui::GetForegroundDrawList();
     const ImVec2 size = ImGui::CalcTextSize(buf);
-    const ImVec2 pos(12.f, 12.f);
-    const ImVec2 topLeft(pos.x - 6.f, pos.y - 3.f);
-    const ImVec2 bottomRight(pos.x + size.x + 6.f, pos.y + size.y + 3.f);
+    const ImVec2 pos(14.f, 14.f);
+    const ImVec2 topLeft(pos.x - 8.f, pos.y - 5.f);
+    const ImVec2 bottomRight(pos.x + size.x + 8.f, pos.y + size.y + 5.f);
 
-    d->AddRectFilled(topLeft, bottomRight, skeet::col::kWindowBg);
-    d->AddRect(topLeft, bottomRight, skeet::col::kBorder);
-    d->AddLine(topLeft, ImVec2(bottomRight.x, topLeft.y), skeet::col::kAccent);
-    d->AddText(pos, skeet::col::kText, buf);
+    d->AddRectFilled(topLeft, bottomRight, theme::col::kChildBg, 4.f);
+    d->AddRect(topLeft, bottomRight, theme::col::kBorder, 4.f);
+    d->AddRectFilled(topLeft, ImVec2(bottomRight.x, topLeft.y + 2.f),
+                     theme::col::kAccent, 2.f, ImDrawFlags_RoundCornersTop);
+    d->AddText(pos, theme::col::kChildText, buf);
 }
 
 } // namespace
@@ -61,7 +65,7 @@ void DrawWatermark() {
 namespace menu {
 
 void ApplyStyle() {
-    skeet::ApplyStyle();
+    theme::ApplyStyle();
 }
 
 void Render() {
@@ -70,11 +74,11 @@ void Render() {
     if (!g::menuOpen)
         return;
 
-    ImGui::SetNextWindowSize(ImVec2(658.f, 436.f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(800.f, 620.f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowBgAlpha(cfg::c.menuAlpha);
 
-    // No ImGui title bar: the strip drawn by WindowChrome is the title, and the
-    // window still drags from any empty spot.
+    // No ImGui title bar: the sidebar header is the title, and the window still
+    // drags from any empty spot.
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
                                    ImGuiWindowFlags_NoCollapse |
                                    ImGuiWindowFlags_NoScrollbar |
@@ -85,32 +89,35 @@ void Render() {
         return;
     }
 
-    skeet::WindowChrome("4fir");
+    theme::WindowChrome("4fir");
 
-    // Below the title strip, inset by the double border.
-    ImGui::SetCursorPos(ImVec2(9.f, 25.f));
-
-    skeet::BeginTabRow(skeet::metric::kTabRowH);
+    // ---- sidebar ----
+    ImGui::SetCursorPos(ImVec2(10.f, 68.f));
+    ImGui::BeginGroup();
     for (int i = 0; i < kTabCount; ++i)
-        skeet::Tab(kTabs[i].name, i, &g_tab);
-    skeet::EndTabRow();
+        theme::Tab(kTabs[i].name, i, &g_tab);
+    ImGui::EndGroup();
 
+    // ---- content ----
     const ui::SubTabs subs = kTabs[g_tab].subs();
-
     if (g_sub[g_tab] >= subs.count)
         g_sub[g_tab] = 0;
 
-    skeet::BeginTabRow(skeet::metric::kSubTabRowH);
-    for (int i = 0; i < subs.count; ++i)
-        skeet::SubTab(subs.names[i], i, &g_sub[g_tab]);
-    skeet::EndTabRow();
+    ImGui::SetCursorPos(ImVec2(theme::metric::kSidebarW + 16.f, 16.f));
+    ImGui::BeginGroup();
 
-    // Content scrolls on its own so the tab strips never move.
-    ImGui::BeginChild("##content", ImVec2(-9.f, -6.f), ImGuiChildFlags_None,
+    theme::BeginTabRow(theme::metric::kSubTabRowH);
+    for (int i = 0; i < subs.count; ++i)
+        theme::SubTab(subs.names[i], i, &g_sub[g_tab]);
+    theme::EndTabRow();
+
+    // The content scrolls on its own so the sidebar and sub-tabs never move.
+    ImGui::BeginChild("##content", ImVec2(-16.f, -16.f), ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoBackground);
     kTabs[g_tab].draw(g_sub[g_tab]);
     ImGui::EndChild();
 
+    ImGui::EndGroup();
     ImGui::End();
 }
 

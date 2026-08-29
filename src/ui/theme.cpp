@@ -2,20 +2,66 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
+#include <unordered_map>
 
 #include "imgui.h"
 #include "imgui_internal.h"
 
-#include "ui/skeet.h"
+#include "ui/theme.h"
 
-namespace skeet {
+namespace theme {
 namespace {
 
 using namespace metric;
 
-// The caption of a groupbox has to be drawn before its child window opens,
-// otherwise the child's draw commands can land on top of it. Only the geometry
-// and the auto-height bookkeeping survive until EndGroupBox.
+// --------------------------------------------------------------- easing ---
+//
+// Neverlose eases every state change instead of snapping it, so each widget
+// needs somewhere to keep its in-flight value between frames. Keyed on the
+// ImGui id plus a slot number, because one widget animates several things.
+
+struct AnimKey {
+    ImGuiID id;
+    int     slot;
+    bool operator==(const AnimKey& o) const { return id == o.id && slot == o.slot; }
+};
+
+struct AnimHash {
+    size_t operator()(const AnimKey& k) const {
+        return (static_cast<size_t>(k.id) * 31u) ^ static_cast<size_t>(k.slot);
+    }
+};
+
+std::unordered_map<AnimKey, float, AnimHash>  g_animFloat;
+std::unordered_map<AnimKey, ImVec4, AnimHash> g_animColor;
+
+float Ease(ImGuiID id, int slot, float target, float speed = kAnimSpeed) {
+    const float dt = ImGui::GetIO().DeltaTime;
+    auto it = g_animFloat.find({ id, slot });
+    if (it == g_animFloat.end()) {
+        g_animFloat[{ id, slot }] = target;   // first frame lands on the value
+        return target;
+    }
+    it->second = ImLerp(it->second, target, ImSaturate(dt * speed));
+    return it->second;
+}
+
+ImU32 EaseColor(ImGuiID id, int slot, ImU32 target, float speed = kAnimSpeed) {
+    const ImVec4 want = ImGui::ColorConvertU32ToFloat4(target);
+    const float dt = ImGui::GetIO().DeltaTime;
+
+    auto it = g_animColor.find({ id, slot });
+    if (it == g_animColor.end()) {
+        g_animColor[{ id, slot }] = want;
+        return target;
+    }
+    it->second = ImLerp(it->second, want, ImSaturate(dt * speed));
+    return ImGui::ColorConvertFloat4ToU32(it->second);
+}
+
+// --------------------------------------------------------------- helpers --
+
 struct GroupState {
     ImVec2        min{};
     ImVec2        max{};
@@ -28,11 +74,8 @@ constexpr int kMaxGroupDepth = 8;
 GroupState g_groups[kMaxGroupDepth];
 int        g_groupDepth = 0;
 
-// Which keybind widget is listening for a press, keyed by ImGui id so two
-// pickers cannot swallow each other's key.
 ImGuiID g_capturing = 0;
 
-// Row of tabs currently being laid out, so the underline can span it.
 struct TabRow {
     ImVec2 min{};
     float  height = 0.f;
@@ -40,54 +83,34 @@ struct TabRow {
 };
 TabRow g_tabRow;
 
-ImU32 Blend(ImU32 a, ImU32 b, float t) {
-    const ImVec4 ca = ImGui::ColorConvertU32ToFloat4(a);
-    const ImVec4 cb = ImGui::ColorConvertU32ToFloat4(b);
-    return ImGui::ColorConvertFloat4ToU32(ImVec4(ca.x + (cb.x - ca.x) * t,
-                                                 ca.y + (cb.y - ca.y) * t,
-                                                 ca.z + (cb.z - ca.z) * t,
-                                                 ca.w + (cb.w - ca.w) * t));
-}
-
 void DrawTextAt(ImDrawList* d, const ImVec2& pos, ImU32 color, const char* text) {
     d->AddText(ImVec2(ImFloor(pos.x), ImFloor(pos.y)), color, text);
 }
 
-// Every control occupies the full inner width of its groupbox.
 float RowWidth() {
     const float w = ImGui::GetContentRegionAvail().x;
     return w < 24.f ? 24.f : w;
 }
 
-// Shared frame for combo / keybind / button boxes.
-void DrawBox(ImDrawList* d, const ImRect& bb, bool hovered, bool active) {
-    d->AddRectFilled(bb.Min, bb.Max, col::kControlBg);
-    ImU32 border = col::kBorder;
-    if (active)
-        border = col::kAccent;
-    else if (hovered)
-        border = Blend(col::kBorder, col::kAccent, 0.55f);
-    d->AddRect(bb.Min, bb.Max, border);
-}
-
-void DrawArrow(ImDrawList* d, const ImRect& bb, ImU32 color) {
-    const float cx = bb.Max.x - 7.f;
+void DrawArrow(ImDrawList* d, const ImRect& bb, ImU32 color, float openAmount) {
+    const float cx = bb.Max.x - 10.f;
     const float cy = (bb.Min.y + bb.Max.y) * 0.5f;
-    d->AddTriangleFilled(ImVec2(cx - 3.f, cy - 1.5f), ImVec2(cx + 3.f, cy - 1.5f),
-                         ImVec2(cx, cy + 2.5f), color);
+    // Flips as the popup opens instead of just sitting there.
+    const float dir = 1.f - openAmount * 2.f;
+    d->AddTriangleFilled(ImVec2(cx - 3.5f, cy - 2.f * dir), ImVec2(cx + 3.5f, cy - 2.f * dir),
+                         ImVec2(cx, cy + 2.5f * dir), color);
 }
 
-// Popup chrome shared by combo, multi-combo and the colour picker.
 bool BeginStyledPopup(const char* id, const ImRect& anchor, float width) {
-    ImGui::SetNextWindowPos(ImVec2(anchor.Min.x, anchor.Max.y + 1.f));
+    ImGui::SetNextWindowPos(ImVec2(anchor.Min.x, anchor.Max.y + 3.f));
     if (width > 0.f)
         ImGui::SetNextWindowSize(ImVec2(width, 0.f));
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.f, 2.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 1.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, kRounding);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, 1.f);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::ColorConvertU32ToFloat4(col::kWindowBg));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImGui::ColorConvertU32ToFloat4(col::kChildBg));
     ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(col::kBorder));
 
     const bool open = ImGui::BeginPopup(id, ImGuiWindowFlags_NoMove |
@@ -106,12 +129,11 @@ void EndStyledPopup() {
     ImGui::PopStyleVar(4);
 }
 
-// One selectable row inside a popup, drawn by hand so it matches the rest.
 bool PopupRow(const char* text, bool selected, bool showTick) {
     ImGuiWindow* win = ImGui::GetCurrentWindow();
     const ImGuiID id = win->GetID(text);
 
-    const float h = ImGui::GetTextLineHeight() + 3.f;
+    const float h = ImGui::GetTextLineHeight() + 6.f;
     const ImVec2 pos = win->DC.CursorPos;
     const ImRect bb(pos, ImVec2(pos.x + ImGui::GetContentRegionAvail().x, pos.y + h));
 
@@ -123,21 +145,22 @@ bool PopupRow(const char* text, bool selected, bool showTick) {
     const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
 
     ImDrawList* d = win->DrawList;
-    if (hovered)
-        d->AddRectFilled(bb.Min, bb.Max, IM_COL32(0x1E, 0x1E, 0x1E, 0xFF));
+    const ImU32 bg = EaseColor(id, 0, hovered ? col::kFrameActive : col::kControlBg);
+    d->AddRectFilled(bb.Min, bb.Max, bg, kRounding);
 
-    float textX = bb.Min.x + 4.f;
+    float textX = bb.Min.x + 8.f;
     if (showTick) {
-        const float s = 7.f;
-        const ImVec2 bmin(bb.Min.x + 4.f, (bb.Min.y + bb.Max.y) * 0.5f - s * 0.5f);
+        const float s = 8.f;
+        const ImVec2 bmin(bb.Min.x + 7.f, (bb.Min.y + bb.Max.y) * 0.5f - s * 0.5f);
         const ImVec2 bmax(bmin.x + s, bmin.y + s);
-        d->AddRectFilled(bmin, bmax, selected ? col::kAccent : col::kControlBg);
-        d->AddRect(bmin, bmax, selected ? col::kAccent : col::kBorder);
-        textX = bmax.x + 5.f;
+        const ImU32 fill = EaseColor(id, 1, selected ? col::kAccent : col::kControlBg);
+        d->AddRectFilled(bmin, bmax, fill, 2.f);
+        d->AddRect(bmin, bmax, selected ? col::kAccent : col::kBorder, 2.f);
+        textX = bmax.x + 8.f;
     }
 
-    const ImU32 color = selected ? col::kAccent : (hovered ? col::kText : col::kTextDim);
-    DrawTextAt(d, ImVec2(textX, bb.Min.y + 1.f), color, text);
+    const ImU32 color = EaseColor(id, 2, selected ? col::kTextActive : col::kText);
+    DrawTextAt(d, ImVec2(textX, bb.Min.y + 3.f), color, text);
     return pressed;
 }
 
@@ -148,39 +171,37 @@ bool PopupRow(const char* text, bool selected, bool showTick) {
 void ApplyStyle() {
     ImGuiStyle& s = ImGui::GetStyle();
 
-    // Skeet is square. Nothing in this menu gets a rounded corner.
-    s.WindowRounding    = 0.f;
-    s.ChildRounding     = 0.f;
-    s.FrameRounding     = 0.f;
-    s.PopupRounding     = 0.f;
-    s.GrabRounding      = 0.f;
-    s.TabRounding       = 0.f;
-    s.ScrollbarRounding = 0.f;
+    s.WindowRounding    = 6.f;
+    s.ChildRounding     = kRounding;
+    s.FrameRounding     = kRounding;
+    s.PopupRounding     = kRounding;
+    s.GrabRounding      = kRounding;
+    s.TabRounding       = kRounding;
+    s.ScrollbarRounding = 6.f;
 
-    // The window and child borders are drawn by hand, so ImGui draws none.
-    s.WindowBorderSize = 0.f;
+    s.WindowBorderSize = 0.f;   // drawn by hand
     s.ChildBorderSize  = 0.f;
     s.PopupBorderSize  = 1.f;
-    s.FrameBorderSize  = 1.f;
+    s.FrameBorderSize  = 0.f;
 
-    s.WindowPadding    = ImVec2(8.f, 8.f);
-    s.FramePadding     = ImVec2(4.f, 2.f);
-    s.ItemSpacing      = ImVec2(4.f, kRowGap);
-    s.ItemInnerSpacing = ImVec2(4.f, 2.f);
-    s.IndentSpacing    = 10.f;
-    s.ScrollbarSize    = 7.f;
-    s.GrabMinSize      = 6.f;
+    s.WindowPadding    = ImVec2(0.f, 0.f);   // the sidebar owns the left edge
+    s.FramePadding     = ImVec2(6.f, 3.f);
+    s.ItemSpacing      = ImVec2(6.f, kRowGap);
+    s.ItemInnerSpacing = ImVec2(5.f, 3.f);
+    s.IndentSpacing    = 12.f;
+    s.ScrollbarSize    = 6.f;
+    s.GrabMinSize      = 8.f;
 
     ImVec4* c = s.Colors;
-    c[ImGuiCol_WindowBg]  = ImGui::ColorConvertU32ToFloat4(col::kWindowBg);
-    c[ImGuiCol_ChildBg]   = ImGui::ColorConvertU32ToFloat4(col::kChildBg);
-    c[ImGuiCol_PopupBg]   = ImGui::ColorConvertU32ToFloat4(col::kWindowBg);
-    c[ImGuiCol_Border]    = ImGui::ColorConvertU32ToFloat4(col::kBorder);
-    c[ImGuiCol_Text]      = ImGui::ColorConvertU32ToFloat4(col::kText);
-    c[ImGuiCol_TextDisabled] = ImGui::ColorConvertU32ToFloat4(col::kTextDim);
-    c[ImGuiCol_FrameBg]   = ImGui::ColorConvertU32ToFloat4(col::kControlBg);
-    c[ImGuiCol_ScrollbarBg]   = ImGui::ColorConvertU32ToFloat4(col::kControlBg);
-    c[ImGuiCol_ScrollbarGrab] = ImGui::ColorConvertU32ToFloat4(col::kBorder);
+    c[ImGuiCol_WindowBg]      = ImGui::ColorConvertU32ToFloat4(col::kWindowBg);
+    c[ImGuiCol_ChildBg]       = ImGui::ColorConvertU32ToFloat4(col::kChildBg);
+    c[ImGuiCol_PopupBg]       = ImGui::ColorConvertU32ToFloat4(col::kChildBg);
+    c[ImGuiCol_Border]        = ImGui::ColorConvertU32ToFloat4(col::kBorder);
+    c[ImGuiCol_Text]          = ImGui::ColorConvertU32ToFloat4(col::kChildText);
+    c[ImGuiCol_TextDisabled]  = ImGui::ColorConvertU32ToFloat4(col::kTextDim);
+    c[ImGuiCol_FrameBg]       = ImGui::ColorConvertU32ToFloat4(col::kControlBg);
+    c[ImGuiCol_ScrollbarBg]   = ImGui::ColorConvertU32ToFloat4(col::kWindowBg);
+    c[ImGuiCol_ScrollbarGrab] = ImGui::ColorConvertU32ToFloat4(col::kBorderHot);
     c[ImGuiCol_ScrollbarGrabHovered] = ImGui::ColorConvertU32ToFloat4(col::kAccent);
     c[ImGuiCol_ScrollbarGrabActive]  = ImGui::ColorConvertU32ToFloat4(col::kAccent);
 }
@@ -191,24 +212,21 @@ void WindowChrome(const char* title) {
     const ImVec2 s = ImGui::GetWindowSize();
     const ImVec2 br(p.x + s.x, p.y + s.y);
 
-    // Three nested rectangles: hairline outside, soft inset, then the content
-    // frame. This layering is what reads as "Skeet" more than any single colour.
-    // The fill is left to ImGui's own WindowBg so the opacity slider still works.
-    d->AddRect(p, br, col::kBorder);
-    d->AddRect(ImVec2(p.x + 2.f, p.y + 2.f), ImVec2(br.x - 2.f, br.y - 2.f),
-               col::kBorderSoft);
+    // One rounded body, one hairline border, and the sidebar column separated
+    // by a single line - neverlose has no nested frames at all.
+    d->AddRect(p, br, col::kBorder, 6.f);
 
-    // Title strip with an accent rule under it.
-    const float strip = 17.f;
-    const ImVec2 t0(p.x + 3.f, p.y + 3.f);
-    const ImVec2 t1(br.x - 3.f, p.y + 3.f + strip);
-    d->AddRectFilled(t0, t1, IM_COL32(0x0D, 0x0D, 0x0D, 0xFF));
-    d->AddRect(t0, t1, col::kBorderSoft);
-    DrawTextAt(d, ImVec2(t0.x + 6.f, t0.y + 2.f), col::kAccent, title);
+    const float sidebar = p.x + kSidebarW;
+    d->AddLine(ImVec2(sidebar, p.y + 1.f), ImVec2(sidebar, br.y - 1.f), col::kBorder);
 
+    // Product name at the top of the sidebar, accent dot beside it.
     const ImVec2 ts = ImGui::CalcTextSize(title);
-    d->AddLine(ImVec2(t0.x + 6.f, t1.y - 1.f), ImVec2(t0.x + 6.f + ts.x, t1.y - 1.f),
-               col::kAccent);
+    const ImVec2 at(p.x + 26.f, p.y + 22.f);
+    DrawTextAt(d, at, col::kLogo, title);
+    d->AddCircleFilled(ImVec2(at.x - 10.f, at.y + ts.y * 0.5f), 3.f, col::kAccent, 12);
+
+    d->AddLine(ImVec2(p.x + 15.f, p.y + 52.f), ImVec2(sidebar - 15.f, p.y + 52.f),
+               col::kBorder);
 }
 
 // --------------------------------------------------------------- layout ---
@@ -236,7 +254,7 @@ void BeginGroupBox(const char* label, const ImVec2& size) {
 
     const bool autoSize = sz.y <= 0.f;
     if (autoSize)
-        sz.y = storage->GetFloat(id, 48.f);
+        sz.y = storage->GetFloat(id, 60.f);
 
     const ImVec2 pos = win->DC.CursorPos;
 
@@ -247,23 +265,19 @@ void BeginGroupBox(const char* label, const ImVec2& size) {
     g.storage = storage;
     g.autoSize = autoSize;
 
-    // Frame first, caption second, content last: the caption must exist before
-    // the child window opens so nothing can be drawn over it.
+    // Body, hairline, then the header - drawn before the child window opens so
+    // nothing inside can land on top of the caption.
     ImDrawList* d = win->DrawList;
-    d->AddRectFilled(g.min, g.max, col::kChildBg);
-    d->AddRect(g.min, g.max, col::kBorder);
+    d->AddRectFilled(g.min, g.max, col::kChildBg, kRounding);
+    d->AddRect(g.min, g.max, col::kBorder, kRounding);
 
-    const ImVec2 ts = ImGui::CalcTextSize(label);
-    const float lx = g.min.x + kGroupPadX;
-    d->AddRectFilled(ImVec2(lx - 3.f, g.min.y - 1.f),
-                     ImVec2(lx + ts.x + 3.f, g.min.y + 1.f), col::kChildBg);
-    DrawTextAt(d, ImVec2(lx, g.min.y - ts.y * 0.5f), col::kTextDim, label);
+    DrawTextAt(d, ImVec2(g.min.x + kGroupPadX, g.min.y + 8.f), col::kChildText, label);
+    d->AddLine(ImVec2(g.min.x + 1.f, g.min.y + kGroupPadY - 5.f),
+               ImVec2(g.max.x - 1.f, g.min.y + kGroupPadY - 5.f), col::kBorder);
 
-    // The child is inset so every control inside can simply take the full
-    // content width and still keep the padding.
     ImGui::SetCursorScreenPos(ImVec2(pos.x + kGroupPadX, pos.y + kGroupPadY));
     ImGui::BeginChild("##content",
-                      ImVec2(sz.x - kGroupPadX * 2.f, sz.y - kGroupPadY - 5.f),
+                      ImVec2(sz.x - kGroupPadX * 2.f, sz.y - kGroupPadY - 8.f),
                       ImGuiChildFlags_None,
                       ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
                           ImGuiWindowFlags_NoScrollWithMouse);
@@ -272,15 +286,13 @@ void BeginGroupBox(const char* label, const ImVec2& size) {
 void EndGroupBox() {
     IM_ASSERT(g_groupDepth > 0);
 
-    // Height the content actually needed this frame, before the child closes.
     const float used = ImGui::GetCursorPosY();
     ImGui::EndChild();
 
     GroupState& g = g_groups[--g_groupDepth];
     if (g.autoSize && g.storage)
-        g.storage->SetFloat(g.id, used + kGroupPadY + 4.f);
+        g.storage->SetFloat(g.id, used + kGroupPadY + 6.f);
 
-    // Put the cursor back so the groupbox occupies exactly its own rectangle.
     ImGui::SetCursorScreenPos(g.min);
     ImGui::ItemSize(ImVec2(g.max.x - g.min.x, g.max.y - g.min.y), 0.f);
     ImGui::PopID();
@@ -291,9 +303,9 @@ void Separator() {
     const ImVec2 pos = win->DC.CursorPos;
     const float w = RowWidth();
 
-    ImGui::ItemSize(ImVec2(w, 3.f), 0.f);
-    win->DrawList->AddLine(ImVec2(pos.x, pos.y + 1.f), ImVec2(pos.x + w, pos.y + 1.f),
-                           col::kBorderSoft);
+    ImGui::ItemSize(ImVec2(w, 5.f), 0.f);
+    win->DrawList->AddLine(ImVec2(pos.x, pos.y + 2.f), ImVec2(pos.x + w, pos.y + 2.f),
+                           col::kBorder);
 }
 
 namespace {
@@ -317,14 +329,14 @@ void TextV(ImU32 color, const char* fmt, va_list args) {
 void Text(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    TextV(col::kText, fmt, args);
+    TextV(col::kChildText, fmt, args);
     va_end(args);
 }
 
 void TextDim(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    TextV(col::kTextDim, fmt, args);
+    TextV(col::kText, fmt, args);
     va_end(args);
 }
 
@@ -350,28 +362,23 @@ void EndTabRow() {
     g_tabRow.open = false;
 
     ImGuiWindow* win = ImGui::GetCurrentWindow();
-    const float w = ImGui::GetContentRegionAvail().x;
     const float y = g_tabRow.min.y + g_tabRow.height;
+    const float w = ImGui::GetContentRegionAvail().x;
     win->DrawList->AddLine(ImVec2(g_tabRow.min.x, y), ImVec2(g_tabRow.min.x + w, y),
                            col::kBorder);
-
-    ImGui::SetCursorScreenPos(ImVec2(g_tabRow.min.x, y + 4.f));
+    ImGui::SetCursorScreenPos(ImVec2(g_tabRow.min.x, y + 10.f));
 }
 
-namespace {
-
-// Main tabs and sub-tabs differ only in metrics and in how the active one is
-// marked, so they share one implementation.
-bool TabImpl(const char* label, int index, int* current, float height, bool underline) {
+bool Tab(const char* label, int index, int* current) {
     ImGuiWindow* win = ImGui::GetCurrentWindow();
+    if (win->SkipItems)
+        return false;
+
     const ImGuiID id = win->GetID(label);
-
-    const ImVec2 ts = ImGui::CalcTextSize(label);
-    const float padX = underline ? 11.f : 8.f;
     const ImVec2 pos = win->DC.CursorPos;
-    const ImRect bb(pos, ImVec2(pos.x + ts.x + padX * 2.f, pos.y + height));
+    const ImRect bb(pos, ImVec2(pos.x + kTabW, pos.y + kTabH));
 
-    ImGui::ItemSize(ImVec2(bb.GetWidth(), height), 0.f);
+    ImGui::ItemSize(ImVec2(kTabW, kTabH), 0.f);
     if (!ImGui::ItemAdd(bb, id))
         return false;
 
@@ -382,35 +389,71 @@ bool TabImpl(const char* label, int index, int* current, float height, bool unde
 
     const bool active = (*current == index);
 
+    // The pill fades in rather than appearing, and it is inset by 15 px on both
+    // sides so the sidebar keeps its margin.
+    ImVec4 frame = ImGui::ColorConvertU32ToFloat4(col::kTabFrame);
+    frame.w = active ? 1.f : (hovered ? 0.35f : 0.f);
+    const ImU32 fill = EaseColor(id, 0, ImGui::ColorConvertFloat4ToU32(frame));
+
     ImDrawList* d = win->DrawList;
-    ImU32 color = col::kTextDim;
-    if (active)
-        color = col::kAccent;
-    else if (hovered)
-        color = col::kText;
+    d->AddRectFilled(ImVec2(bb.Min.x + 15.f, bb.Min.y), ImVec2(bb.Max.x - 15.f, bb.Max.y),
+                     fill, kRounding);
 
-    DrawTextAt(d, ImVec2(bb.Min.x + padX, bb.Min.y + (height - ts.y) * 0.5f),
-               color, label);
+    const ImU32 text = EaseColor(id, 1, active ? col::kTextActive : col::kText);
+    const ImVec2 ts = ImGui::CalcTextSize(label);
+    DrawTextAt(d, ImVec2(bb.Min.x + 30.f, bb.Min.y + (kTabH - ts.y) * 0.5f), text, label);
 
-    if (active && underline)
-        d->AddLine(ImVec2(bb.Min.x + 2.f, bb.Max.y - 1.f),
-                   ImVec2(bb.Max.x - 2.f, bb.Max.y - 1.f), col::kAccent);
-    else if (active)
-        d->AddLine(ImVec2(bb.Min.x + 4.f, bb.Max.y - 2.f),
-                   ImVec2(bb.Max.x - 4.f, bb.Max.y - 2.f), col::kAccent);
-
-    ImGui::SameLine(0.f, 0.f);
+    // Accent marker on the active tab. Neverlose puts an icon glyph here from a
+    // font this project does not ship, so the slot carries a bar instead.
+    const float mark = Ease(id, 2, active ? 12.f : 0.f);
+    if (mark > 0.5f)
+        d->AddRectFilled(ImVec2(bb.Min.x + 15.f, (bb.Min.y + bb.Max.y) * 0.5f - mark * 0.5f),
+                         ImVec2(bb.Min.x + 17.f, (bb.Min.y + bb.Max.y) * 0.5f + mark * 0.5f),
+                         col::kAccent, 1.f);
     return pressed;
 }
 
-} // namespace
-
-bool Tab(const char* label, int index, int* current) {
-    return TabImpl(label, index, current, kTabRowH, true);
-}
-
 bool SubTab(const char* label, int index, int* current) {
-    return TabImpl(label, index, current, kSubTabRowH, false);
+    ImGuiWindow* win = ImGui::GetCurrentWindow();
+    if (win->SkipItems)
+        return false;
+
+    const ImGuiID id = win->GetID(label);
+    const ImVec2 ts = ImGui::CalcTextSize(label);
+    const float w = ts.x + 26.f;
+    const ImVec2 pos = win->DC.CursorPos;
+    const ImRect bb(pos, ImVec2(pos.x + w, pos.y + kSubTabRowH));
+
+    ImGui::ItemSize(ImVec2(w, kSubTabRowH), 0.f);
+    if (!ImGui::ItemAdd(bb, id)) {
+        ImGui::SameLine(0.f, 0.f);
+        return false;
+    }
+
+    bool hovered = false, held = false;
+    const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
+    if (pressed)
+        *current = index;
+
+    const bool active = (*current == index);
+
+    ImDrawList* d = win->DrawList;
+    const ImU32 text = EaseColor(id, 0,
+                                 active ? col::kTextActive : (hovered ? col::kChildText
+                                                                      : col::kText));
+    DrawTextAt(d, ImVec2(bb.Min.x + 13.f, bb.Min.y + (kSubTabRowH - ts.y) * 0.5f),
+               text, label);
+
+    // Underline grows from the centre out.
+    const float half = Ease(id, 1, active ? ts.x * 0.5f : 0.f);
+    if (half > 0.5f) {
+        const float cx = (bb.Min.x + bb.Max.x) * 0.5f;
+        d->AddRectFilled(ImVec2(cx - half, bb.Max.y - 2.f), ImVec2(cx + half, bb.Max.y),
+                         col::kAccent, 1.f);
+    }
+
+    ImGui::SameLine(0.f, 0.f);
+    return pressed;
 }
 
 // -------------------------------------------------------------- widgets ---
@@ -422,11 +465,12 @@ bool Checkbox(const char* label, bool* value) {
 
     const ImGuiID id = win->GetID(label);
     const ImVec2 ts = ImGui::CalcTextSize(label);
-    const float h = ts.y > kCheckBox ? ts.y : kCheckBox;
+    const float h = ts.y > kToggleH ? ts.y : kToggleH;
     const ImVec2 pos = win->DC.CursorPos;
-    const ImRect bb(pos, ImVec2(pos.x + RowWidth(), pos.y + h));
+    const float w = RowWidth();
+    const ImRect bb(pos, ImVec2(pos.x + w, pos.y + h));
 
-    ImGui::ItemSize(ImVec2(bb.GetWidth(), h), 0.f);
+    ImGui::ItemSize(ImVec2(w, h), 0.f);
     if (!ImGui::ItemAdd(bb, id))
         return false;
 
@@ -437,31 +481,32 @@ bool Checkbox(const char* label, bool* value) {
         ImGui::MarkItemEdited(id);
     }
 
-    const ImVec2 bmin(pos.x, pos.y + (h - kCheckBox) * 0.5f);
-    const ImVec2 bmax(bmin.x + kCheckBox, bmin.y + kCheckBox);
-
     ImDrawList* d = win->DrawList;
-    if (*value) {
-        d->AddRectFilled(bmin, bmax, hovered ? col::kAccentHot : col::kAccent);
-        d->AddRect(bmin, bmax, col::kAccent);
-    } else {
-        d->AddRectFilled(bmin, bmax, col::kControlBg);
-        d->AddRect(bmin, bmax, hovered ? Blend(col::kBorder, col::kAccent, 0.6f)
-                                       : col::kBorder);
-    }
 
-    const ImU32 textColor = ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled
-                                ? col::kTextDim
-                                : (*value ? col::kText : col::kTextDim);
-    DrawTextAt(d, ImVec2(bmax.x + 5.f, pos.y + (h - ts.y) * 0.5f), textColor, label);
+    // Label left, switch right - the switch is what makes this neverlose.
+    const ImU32 text = EaseColor(id, 0, *value ? col::kChildText : col::kText);
+    DrawTextAt(d, ImVec2(pos.x, pos.y + (h - ts.y) * 0.5f), text, label);
+
+    const ImVec2 tmin(pos.x + w - kToggleW, pos.y + (h - kToggleH) * 0.5f);
+    const ImVec2 tmax(tmin.x + kToggleW, tmin.y + kToggleH);
+
+    const ImU32 track = EaseColor(id, 1, *value ? col::kFrameActive
+                                                : (hovered ? col::kFrameHover
+                                                           : col::kControlBg));
+    d->AddRectFilled(tmin, tmax, track, kToggleH * 0.5f);
+    d->AddRect(tmin, tmax, *value ? col::kAccent : col::kBorder, kToggleH * 0.5f);
+
+    // The knob slides between the two ends instead of jumping.
+    const float travel = kToggleW - kKnobR * 2.f - 3.f;
+    const float x = Ease(id, 2, *value ? travel : 0.f);
+    const ImU32 knob = EaseColor(id, 3, *value ? col::kAccent : col::kAccentDim);
+    d->AddCircleFilled(ImVec2(tmin.x + kKnobR + 1.5f + x, (tmin.y + tmax.y) * 0.5f),
+                       kKnobR, knob, 16);
     return pressed;
 }
 
 namespace {
 
-// One slider implementation for both scalar types; the caller supplies the
-// data type so ImGui's own SliderBehavior does the clamping and the keyboard
-// and gamepad handling.
 bool SliderImpl(const char* label, ImGuiDataType type, void* value,
                 const void* min, const void* max, const char* format) {
     ImGuiWindow* win = ImGui::GetCurrentWindow();
@@ -470,13 +515,13 @@ bool SliderImpl(const char* label, ImGuiDataType type, void* value,
 
     const ImGuiID id = win->GetID(label);
     const float textH = ImGui::GetTextLineHeight();
-    const float h = textH + 2.f + kSliderBar;
+    const float h = textH + 5.f + kSliderBar;
     const ImVec2 pos = win->DC.CursorPos;
     const float w = RowWidth();
 
     const ImRect bb(pos, ImVec2(pos.x + w, pos.y + h));
-    const ImRect bar(ImVec2(pos.x, pos.y + textH + 2.f),
-                     ImVec2(pos.x + w, pos.y + textH + 2.f + kSliderBar));
+    const ImRect bar(ImVec2(pos.x, pos.y + textH + 5.f),
+                     ImVec2(pos.x + w, pos.y + textH + 5.f + kSliderBar));
 
     ImGui::ItemSize(ImVec2(w, h), 0.f);
     if (!ImGui::ItemAdd(bb, id))
@@ -489,9 +534,8 @@ bool SliderImpl(const char* label, ImGuiDataType type, void* value,
         ImGui::MarkItemEdited(id);
 
     const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
 
-    // Filled fraction, taken from the value rather than from the grab box so a
-    // zero-width grab still paints the correct amount.
     float t = 0.f;
     if (type == ImGuiDataType_Float) {
         const float v = *static_cast<float*>(value);
@@ -504,27 +548,66 @@ bool SliderImpl(const char* label, ImGuiDataType type, void* value,
         const int hi = *static_cast<const int*>(max);
         t = hi > lo ? static_cast<float>(v - lo) / static_cast<float>(hi - lo) : 0.f;
     }
-    t = t < 0.f ? 0.f : (t > 1.f ? 1.f : t);
+    t = ImSaturate(t);
 
     char valueText[64];
     ImGui::DataTypeFormatString(valueText, IM_ARRAYSIZE(valueText), type, value, format);
 
     ImDrawList* d = win->DrawList;
-    DrawTextAt(d, pos, col::kTextDim, label);
+    DrawTextAt(d, pos, col::kText, label);
 
     const ImVec2 vs = ImGui::CalcTextSize(valueText);
-    DrawTextAt(d, ImVec2(pos.x + w - vs.x, pos.y), col::kText, valueText);
+    const ImU32 valueCol = EaseColor(id, 0, (hovered || active) ? col::kTextActive
+                                                               : col::kChildText);
+    DrawTextAt(d, ImVec2(pos.x + w - vs.x, pos.y), valueCol, valueText);
 
-    d->AddRectFilled(bar.Min, bar.Max, col::kControlBg);
-    if (t > 0.f) {
-        const float fill = bar.Min.x + (bar.Max.x - bar.Min.x) * t;
-        d->AddRectFilled(ImVec2(bar.Min.x + 1.f, bar.Min.y + 1.f),
-                         ImVec2(fill, bar.Max.y - 1.f),
-                         hovered ? col::kAccentHot : col::kAccent);
+    const float radius = kSliderBar * 0.5f;
+    d->AddRectFilled(bar.Min, bar.Max, col::kControlBg, radius);
+
+    // The fill eases so dragging reads as motion, not as teleporting pixels.
+    const float fillT = Ease(id, 1, t, active ? 30.f : kAnimSpeed);
+    if (fillT > 0.001f) {
+        const float fillX = bar.Min.x + (bar.Max.x - bar.Min.x) * fillT;
+        d->AddRectFilled(bar.Min, ImVec2(fillX, bar.Max.y), col::kAccent, radius);
+        d->AddCircleFilled(ImVec2(fillX, (bar.Min.y + bar.Max.y) * 0.5f),
+                           radius + (hovered ? 2.f : 1.f), col::kAccent, 16);
     }
-    d->AddRect(bar.Min, bar.Max, hovered ? Blend(col::kBorder, col::kAccent, 0.6f)
-                                         : col::kBorder);
+    d->AddRect(bar.Min, bar.Max, col::kBorder, radius);
     return changed;
+}
+
+ImRect LabelledBox(const char* label, float boxHeight, bool* hovered, bool* pressed,
+                   ImGuiID id) {
+    ImGuiWindow* win = ImGui::GetCurrentWindow();
+    const float textH = ImGui::GetTextLineHeight();
+    const float w = RowWidth();
+    const ImVec2 pos = win->DC.CursorPos;
+
+    const ImRect bb(pos, ImVec2(pos.x + w, pos.y + textH + 4.f + boxHeight));
+    const ImRect box(ImVec2(pos.x, pos.y + textH + 4.f),
+                     ImVec2(pos.x + w, pos.y + textH + 4.f + boxHeight));
+
+    ImGui::ItemSize(ImVec2(w, bb.GetHeight()), 0.f);
+    if (!ImGui::ItemAdd(bb, id)) {
+        *hovered = false;
+        *pressed = false;
+        return box;
+    }
+
+    bool held = false;
+    *pressed = ImGui::ButtonBehavior(box, id, hovered, &held);
+    DrawTextAt(win->DrawList, pos, col::kText, label);
+    return box;
+}
+
+void DrawControlFrame(ImDrawList* d, const ImRect& box, ImGuiID id, bool hovered,
+                      bool open) {
+    const ImU32 bg = EaseColor(id, 10, open ? col::kFrameOpen
+                                            : (hovered ? col::kFrameHover
+                                                       : col::kControlBg));
+    d->AddRectFilled(box.Min, box.Max, bg, kRounding);
+    d->AddRect(box.Min, box.Max, EaseColor(id, 11, open ? col::kAccent : col::kBorder),
+               kRounding);
 }
 
 } // namespace
@@ -538,35 +621,6 @@ bool SliderInt(const char* label, int* value, int min, int max, const char* form
     return SliderImpl(label, ImGuiDataType_S32, value, &min, &max, format);
 }
 
-namespace {
-
-// Label line plus the control box, shared by combo, multi-combo and keybind.
-ImRect LabelledBox(const char* label, float boxHeight, bool* hovered, bool* pressed,
-                   ImGuiID id) {
-    ImGuiWindow* win = ImGui::GetCurrentWindow();
-    const float textH = ImGui::GetTextLineHeight();
-    const float w = RowWidth();
-    const ImVec2 pos = win->DC.CursorPos;
-
-    const ImRect bb(pos, ImVec2(pos.x + w, pos.y + textH + 2.f + boxHeight));
-    const ImRect box(ImVec2(pos.x, pos.y + textH + 2.f),
-                     ImVec2(pos.x + w, pos.y + textH + 2.f + boxHeight));
-
-    ImGui::ItemSize(ImVec2(w, bb.GetHeight()), 0.f);
-    if (!ImGui::ItemAdd(bb, id)) {
-        *hovered = false;
-        *pressed = false;
-        return box;
-    }
-
-    bool held = false;
-    *pressed = ImGui::ButtonBehavior(box, id, hovered, &held);
-    DrawTextAt(win->DrawList, pos, col::kTextDim, label);
-    return box;
-}
-
-} // namespace
-
 bool Combo(const char* label, int* value, const char* const items[], int count) {
     ImGuiWindow* win = ImGui::GetCurrentWindow();
     if (win->SkipItems)
@@ -579,12 +633,13 @@ bool Combo(const char* label, int* value, const char* const items[], int count) 
     const ImRect box = LabelledBox(label, kControlH, &hovered, &pressed, id);
 
     const bool popupOpen = ImGui::IsPopupOpen("##combopopup");
-    DrawBox(win->DrawList, box, hovered, popupOpen);
+    DrawControlFrame(win->DrawList, box, id, hovered, popupOpen);
 
     const char* preview = (*value >= 0 && *value < count) ? items[*value] : "-";
-    DrawTextAt(win->DrawList, ImVec2(box.Min.x + 5.f, box.Min.y + 1.f),
-               col::kText, preview);
-    DrawArrow(win->DrawList, box, popupOpen ? col::kAccent : col::kTextDim);
+    const float ty = box.Min.y + (kControlH - ImGui::GetTextLineHeight()) * 0.5f;
+    DrawTextAt(win->DrawList, ImVec2(box.Min.x + 9.f, ty), col::kChildText, preview);
+    DrawArrow(win->DrawList, box, popupOpen ? col::kAccent : col::kText,
+              Ease(id, 12, popupOpen ? 1.f : 0.f));
 
     if (pressed)
         ImGui::OpenPopup("##combopopup");
@@ -617,9 +672,8 @@ bool MultiCombo(const char* label, bool* values, const char* const items[], int 
     const ImRect box = LabelledBox(label, kControlH, &hovered, &pressed, id);
 
     const bool popupOpen = ImGui::IsPopupOpen("##multipopup");
-    DrawBox(win->DrawList, box, hovered, popupOpen);
+    DrawControlFrame(win->DrawList, box, id, hovered, popupOpen);
 
-    // Preview: joined names, trimmed to whatever fits before the arrow.
     char preview[128] = "none";
     int enabled = 0;
     for (int i = 0; i < count; ++i)
@@ -638,24 +692,24 @@ bool MultiCombo(const char* label, bool* values, const char* const items[], int 
         }
     }
 
-    const float textLimit = box.GetWidth() - 18.f;
-    ImVec2 previewSize = ImGui::CalcTextSize(preview);
-    if (previewSize.x > textLimit) {
-        // Cut and mark it, rather than letting the arrow be overdrawn.
+    const float limit = box.GetWidth() - 26.f;
+    if (ImGui::CalcTextSize(preview).x > limit) {
         for (int len = static_cast<int>(strlen(preview)); len > 3; --len) {
             preview[len - 1] = '\0';
             char probe[132];
             snprintf(probe, sizeof(probe), "%s..", preview);
-            if (ImGui::CalcTextSize(probe).x <= textLimit) {
+            if (ImGui::CalcTextSize(probe).x <= limit) {
                 snprintf(preview + strlen(preview), sizeof(preview) - strlen(preview), "..");
                 break;
             }
         }
     }
 
-    DrawTextAt(win->DrawList, ImVec2(box.Min.x + 5.f, box.Min.y + 1.f),
-               enabled ? col::kText : col::kTextDim, preview);
-    DrawArrow(win->DrawList, box, popupOpen ? col::kAccent : col::kTextDim);
+    const float ty = box.Min.y + (kControlH - ImGui::GetTextLineHeight()) * 0.5f;
+    DrawTextAt(win->DrawList, ImVec2(box.Min.x + 9.f, ty),
+               enabled ? col::kChildText : col::kText, preview);
+    DrawArrow(win->DrawList, box, popupOpen ? col::kAccent : col::kText,
+              Ease(id, 12, popupOpen ? 1.f : 0.f));
 
     if (pressed)
         ImGui::OpenPopup("##multipopup");
@@ -679,7 +733,7 @@ const char* KeyName(int vk) {
     static char buf[24];
 
     switch (vk) {
-    case 0:            return "-";
+    case 0:            return "none";
     case VK_LBUTTON:   return "MOUSE 1";
     case VK_RBUTTON:   return "MOUSE 2";
     case VK_MBUTTON:   return "MOUSE 3";
@@ -717,11 +771,7 @@ const char* KeyName(int vk) {
         snprintf(buf, sizeof(buf), "F%d", vk - VK_F1 + 1);
         return buf;
     }
-    if (vk >= '0' && vk <= '9') {
-        snprintf(buf, sizeof(buf), "%c", static_cast<char>(vk));
-        return buf;
-    }
-    if (vk >= 'A' && vk <= 'Z') {
+    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z')) {
         snprintf(buf, sizeof(buf), "%c", static_cast<char>(vk));
         return buf;
     }
@@ -750,7 +800,7 @@ bool Keybind(const char* label, int* vk) {
     const bool listening = (g_capturing == id);
     const char* keyText = listening ? "..." : KeyName(*vk);
     const ImVec2 ks = ImGui::CalcTextSize(keyText);
-    const float boxW = (ks.x + 12.f < 46.f) ? 46.f : ks.x + 12.f;
+    const float boxW = (ks.x + 18.f < 58.f) ? 58.f : ks.x + 18.f;
 
     const ImRect bb(pos, ImVec2(pos.x + w, pos.y + h));
     const ImRect box(ImVec2(pos.x + w - boxW, pos.y), ImVec2(pos.x + w, pos.y + h));
@@ -768,7 +818,7 @@ bool Keybind(const char* label, int* vk) {
     bool changed = false;
     if (pressed) {
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-            *vk = 0;                      // right click clears the bind
+            *vk = 0;
             g_capturing = 0;
             changed = true;
         } else {
@@ -777,17 +827,16 @@ bool Keybind(const char* label, int* vk) {
     }
 
     ImDrawList* d = win->DrawList;
-    DrawTextAt(d, ImVec2(pos.x, pos.y + (h - textH) * 0.5f), col::kTextDim, label);
-    DrawBox(d, box, hovered, listening);
+    DrawTextAt(d, ImVec2(pos.x, pos.y + (h - textH) * 0.5f), col::kText, label);
+    DrawControlFrame(d, box, id, hovered, listening);
     DrawTextAt(d, ImVec2(box.Min.x + (boxW - ks.x) * 0.5f, box.Min.y + (h - ks.y) * 0.5f),
-               listening ? col::kAccent : col::kText, keyText);
+               listening ? col::kAccent : col::kChildText, keyText);
 
-    // Capture happens against the OS key state: the bind has to be usable for
-    // mouse buttons and modifiers that ImGui's own key list does not surface.
+    // Captured against the OS key state so mouse buttons and modifiers work.
     if (listening) {
         for (int candidate = 0x01; candidate <= 0xFE; ++candidate) {
             if (candidate == VK_LBUTTON)
-                continue;   // reserved for clicking the widget itself
+                continue;
             if ((GetAsyncKeyState(candidate) & 0x8000) == 0)
                 continue;
             if (candidate == VK_ESCAPE) {
@@ -814,14 +863,14 @@ bool ColorPicker(const char* label, ImVec4* color) {
     const ImGuiID id = win->GetID("##color");
 
     const float textH = ImGui::GetTextLineHeight();
-    const float h = textH > 11.f ? textH : 11.f;
+    const float h = textH > 14.f ? textH : 14.f;
     const ImVec2 pos = win->DC.CursorPos;
     const float w = RowWidth();
 
-    const float swatchW = 24.f;
+    const float swatchW = 30.f;
     const ImRect bb(pos, ImVec2(pos.x + w, pos.y + h));
-    const ImRect swatch(ImVec2(pos.x + w - swatchW, pos.y + (h - 10.f) * 0.5f),
-                        ImVec2(pos.x + w, pos.y + (h - 10.f) * 0.5f + 10.f));
+    const ImRect swatch(ImVec2(pos.x + w - swatchW, pos.y + (h - 12.f) * 0.5f),
+                        ImVec2(pos.x + w, pos.y + (h - 12.f) * 0.5f + 12.f));
 
     ImGui::ItemSize(ImVec2(w, h), 0.f);
     if (!ImGui::ItemAdd(bb, id)) {
@@ -833,31 +882,29 @@ bool ColorPicker(const char* label, ImVec4* color) {
     const bool pressed = ImGui::ButtonBehavior(swatch, id, &hovered, &held);
 
     ImDrawList* d = win->DrawList;
-    DrawTextAt(d, ImVec2(pos.x, pos.y + (h - textH) * 0.5f), col::kTextDim, label);
+    DrawTextAt(d, ImVec2(pos.x, pos.y + (h - textH) * 0.5f), col::kText, label);
 
-    // Alpha is shown by splitting the swatch: opaque left, real alpha right.
     const ImU32 opaque = ImGui::ColorConvertFloat4ToU32(ImVec4(color->x, color->y, color->z, 1.f));
     const ImU32 actual = ImGui::ColorConvertFloat4ToU32(*color);
     const float mid = (swatch.Min.x + swatch.Max.x) * 0.5f;
-    d->AddRectFilled(swatch.Min, ImVec2(mid, swatch.Max.y), opaque);
-    d->AddRectFilled(ImVec2(mid, swatch.Min.y), swatch.Max, actual);
-    d->AddRect(swatch.Min, swatch.Max, hovered ? col::kAccent : col::kBorder);
+    d->AddRectFilled(swatch.Min, ImVec2(mid, swatch.Max.y), opaque, 3.f,
+                     ImDrawFlags_RoundCornersLeft);
+    d->AddRectFilled(ImVec2(mid, swatch.Min.y), swatch.Max, actual, 3.f,
+                     ImDrawFlags_RoundCornersRight);
+    d->AddRect(swatch.Min, swatch.Max, hovered ? col::kAccent : col::kBorder, 3.f);
 
     if (pressed)
         ImGui::OpenPopup("##colorpopup");
 
     bool changed = false;
     if (BeginStyledPopup("##colorpopup", swatch, 0.f)) {
-        // Hand-drawn SV square, hue strip and alpha strip. Kept deliberately
-        // small: this is a menu accent picker, not an image editor.
-        constexpr float kSvW = 118.f, kSvH = 92.f, kStrip = 10.f, kGap = 4.f;
+        constexpr float kSvW = 132.f, kSvH = 100.f, kStrip = 11.f, kGap = 5.f;
 
         float hue, sat, val;
         ImGui::ColorConvertRGBtoHSV(color->x, color->y, color->z, hue, sat, val);
 
         ImDrawList* pd = ImGui::GetWindowDrawList();
 
-        // --- saturation / value square ---
         const ImVec2 svPos = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##sv", ImVec2(kSvW, kSvH));
         if (ImGui::IsItemActive()) {
@@ -879,10 +926,8 @@ bool ColorPicker(const char* label, ImVec4* color) {
         pd->AddRect(svPos, svMax, col::kBorder);
 
         const ImVec2 cursor(svPos.x + sat * kSvW, svPos.y + (1.f - val) * kSvH);
-        pd->AddRect(ImVec2(cursor.x - 3.f, cursor.y - 3.f),
-                    ImVec2(cursor.x + 3.f, cursor.y + 3.f), IM_COL32_WHITE);
+        pd->AddCircle(cursor, 4.f, IM_COL32_WHITE, 12, 1.5f);
 
-        // --- hue strip ---
         ImGui::Dummy(ImVec2(0.f, kGap));
         const ImVec2 huePos = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##hue", ImVec2(kSvW, kStrip));
@@ -901,11 +946,10 @@ bool ColorPicker(const char* label, ImVec4* color) {
             pd->AddRectFilledMultiColor(ImVec2(x0, huePos.y), ImVec2(x1, huePos.y + kStrip),
                                         ca, cb, cb, ca);
         }
-        pd->AddRect(huePos, ImVec2(huePos.x + kSvW, huePos.y + kStrip), col::kBorder);
-        pd->AddLine(ImVec2(huePos.x + hue * kSvW, huePos.y),
-                    ImVec2(huePos.x + hue * kSvW, huePos.y + kStrip), IM_COL32_WHITE);
+        pd->AddRect(huePos, ImVec2(huePos.x + kSvW, huePos.y + kStrip), col::kBorder, 3.f);
+        pd->AddCircleFilled(ImVec2(huePos.x + hue * kSvW, huePos.y + kStrip * 0.5f), 4.f,
+                            IM_COL32_WHITE, 12);
 
-        // --- alpha strip ---
         ImGui::Dummy(ImVec2(0.f, kGap));
         const ImVec2 alphaPos = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##alpha", ImVec2(kSvW, kStrip));
@@ -918,13 +962,12 @@ bool ColorPicker(const char* label, ImVec4* color) {
         const ImU32 clear = ImGui::ColorConvertFloat4ToU32(ImVec4(rgb.x, rgb.y, rgb.z, 0.f));
         const ImU32 solid = ImGui::ColorConvertFloat4ToU32(ImVec4(rgb.x, rgb.y, rgb.z, 1.f));
         pd->AddRectFilled(alphaPos, ImVec2(alphaPos.x + kSvW, alphaPos.y + kStrip),
-                          IM_COL32(40, 40, 40, 255));
+                          IM_COL32(40, 40, 40, 255), 3.f);
         pd->AddRectFilledMultiColor(alphaPos, ImVec2(alphaPos.x + kSvW, alphaPos.y + kStrip),
                                     clear, solid, solid, clear);
-        pd->AddRect(alphaPos, ImVec2(alphaPos.x + kSvW, alphaPos.y + kStrip), col::kBorder);
-        pd->AddLine(ImVec2(alphaPos.x + color->w * kSvW, alphaPos.y),
-                    ImVec2(alphaPos.x + color->w * kSvW, alphaPos.y + kStrip),
-                    IM_COL32_WHITE);
+        pd->AddRect(alphaPos, ImVec2(alphaPos.x + kSvW, alphaPos.y + kStrip), col::kBorder, 3.f);
+        pd->AddCircleFilled(ImVec2(alphaPos.x + color->w * kSvW, alphaPos.y + kStrip * 0.5f),
+                            4.f, IM_COL32_WHITE, 12);
 
         if (changed)
             ImGui::ColorConvertHSVtoRGB(hue, sat, val, color->x, color->y, color->z);
@@ -943,7 +986,7 @@ bool Button(const char* label) {
 
     const ImGuiID id = win->GetID(label);
     const ImVec2 ts = ImGui::CalcTextSize(label);
-    const float h = kControlH + 2.f;
+    const float h = kControlH + 3.f;
     const ImVec2 pos = win->DC.CursorPos;
     const ImRect bb(pos, ImVec2(pos.x + RowWidth(), pos.y + h));
 
@@ -955,11 +998,16 @@ bool Button(const char* label) {
     const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
 
     ImDrawList* d = win->DrawList;
-    DrawBox(d, bb, hovered, held);
+    const ImU32 bg = EaseColor(id, 0, held ? col::kFrameActive
+                                           : (hovered ? col::kFrameHover
+                                                      : col::kControlBg));
+    d->AddRectFilled(bb.Min, bb.Max, bg, kRounding);
+    d->AddRect(bb.Min, bb.Max, EaseColor(id, 1, hovered ? col::kAccent : col::kBorder),
+               kRounding);
     DrawTextAt(d, ImVec2(bb.Min.x + (bb.GetWidth() - ts.x) * 0.5f,
                          bb.Min.y + (h - ts.y) * 0.5f),
-               hovered ? col::kAccent : col::kText, label);
+               EaseColor(id, 2, hovered ? col::kTextActive : col::kChildText), label);
     return pressed;
 }
 
-} // namespace skeet
+} // namespace theme

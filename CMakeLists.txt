@@ -65,7 +65,7 @@ add_library(cs2_overlay SHARED
     src/features/rage/fire.cpp
     src/core/config_io.cpp
     src/sdk/trace.cpp
-    src/ui/skeet.cpp
+    src/ui/theme.cpp
     src/ui/menu.cpp
     src/ui/tab_rage.cpp
     src/ui/tab_legit.cpp

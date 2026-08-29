@@ -2,7 +2,7 @@
 
 #include "core/config_io.h"
 #include "core/globals.h"
-#include "ui/skeet.h"
+#include "ui/theme.h"
 #include "ui/tabs.h"
 
 namespace ui {
@@ -24,7 +24,7 @@ void SetStatus(bool ok, const char* verb, const char* detail) {
 }
 
 void DrawConfigs() {
-    const float w = skeet::ColumnWidth(2);
+    const float w = theme::ColumnWidth(2);
 
     // Slot names are built once per frame; six is few enough that this is
     // cheaper than caching it and getting the invalidation wrong.
@@ -36,42 +36,42 @@ void DrawConfigs() {
         labelPtrs[i] = labels[i];
     }
 
-    skeet::BeginGroupBox("Slots", ImVec2(w, 0.f));
-    skeet::Combo("Config", &g_slot, labelPtrs, configio::kSlots);
+    theme::BeginGroupBox("Slots", ImVec2(w, 0.f));
+    theme::Combo("Config", &g_slot, labelPtrs, configio::kSlots);
 
     char error[128] = {};
-    if (skeet::Button("Save"))
+    if (theme::Button("Save"))
         SetStatus(configio::Save(g_slot, error, sizeof(error)), "saved", error);
-    if (skeet::Button("Load"))
+    if (theme::Button("Load"))
         SetStatus(configio::Load(g_slot, error, sizeof(error)), "loaded", error);
-    if (skeet::Button("Delete"))
+    if (theme::Button("Delete"))
         SetStatus(configio::Remove(g_slot, error, sizeof(error)), "deleted", error);
 
-    skeet::Separator();
-    if (skeet::Button("Reset everything to defaults")) {
+    theme::Separator();
+    if (theme::Button("Reset everything to defaults")) {
         configio::ResetToDefaults();
         g_statusIsError = false;
         snprintf(g_status, sizeof(g_status), "reset to defaults");
     }
-    skeet::EndGroupBox();
+    theme::EndGroupBox();
 
     ImGui::SameLine();
 
-    skeet::BeginGroupBox("Status", ImVec2(w, 0.f));
-    skeet::TextColored(g_statusIsError ? skeet::col::kBad : skeet::col::kGood, "%s",
+    theme::BeginGroupBox("Status", ImVec2(w, 0.f));
+    theme::TextColored(g_statusIsError ? theme::col::kBad : theme::col::kGood, "%s",
                        g_status);
-    skeet::Separator();
-    skeet::TextDim("Files live in:");
-    skeet::TextDim("%s", configio::Directory());
-    skeet::Separator();
-    skeet::TextDim("A slot stores the whole settings struct with");
-    skeet::TextDim("its layout version. Rebuild the module with");
-    skeet::TextDim("different settings and old slots are refused");
-    skeet::TextDim("rather than read as garbage.");
-    skeet::Separator();
-    skeet::TextDim("The menu key is kept out of a load, so a");
-    skeet::TextDim("config can never take the menu away from you.");
-    skeet::EndGroupBox();
+    theme::Separator();
+    theme::TextDim("Files live in:");
+    theme::TextDim("%s", configio::Directory());
+    theme::Separator();
+    theme::TextDim("A slot stores the whole settings struct with");
+    theme::TextDim("its layout version. Rebuild the module with");
+    theme::TextDim("different settings and old slots are refused");
+    theme::TextDim("rather than read as garbage.");
+    theme::Separator();
+    theme::TextDim("The menu key is kept out of a load, so a");
+    theme::TextDim("config can never take the menu away from you.");
+    theme::EndGroupBox();
 }
 
 } // namespace
