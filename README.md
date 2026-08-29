@@ -39,12 +39,10 @@ build.bat
 
 Output: `build/cs2_overlay.dll` (x64).
 
-Dependencies live in `deps/` and are cloned once:
-
-```bash
-git clone --depth 1 https://github.com/TsudaKageyu/minhook.git deps/minhook
-git clone --depth 1 --branch docking https://github.com/ocornut/imgui.git deps/imgui
-```
+Dependencies are **vendored** in `deps/`, not cloned. Do not run `git clone`
+over them: `deps/imgui` is a fork - the menu port changes ImGui's own widget
+bodies - and re-cloning would throw the port away. The exact upstream commits
+both trees were forked from are recorded in [`deps/UPSTREAM.md`](deps/UPSTREAM.md).
 
 A `CMakeLists.txt` is also included for anyone who has CMake and prefers it
 (`cmake -B build -A x64 && cmake --build build --config Release`).

@@ -10,9 +10,14 @@ out/
 *.exe
 *.log
 
-# Third-party sources are cloned, not vendored - see the Build section of the
-# README for the two git clone lines that populate this directory.
-deps/
+# deps/imgui and deps/minhook are VENDORED, not cloned - see deps/UPSTREAM.md.
+# ImGui is a fork of ours (the neverlose UI port modifies imgui.cpp /
+# imgui_widgets.cpp / imgui.h in place), so re-cloning it would silently throw
+# the port away. Both are tracked on purpose.
+#
+# cs2-dumper is different: a reference checkout of a third-party Rust tool that
+# nothing here builds or links, kept locally only to read its offset patterns.
+deps/cs2-dumper/
 
 # Editors and CMake scratch
 .vs/

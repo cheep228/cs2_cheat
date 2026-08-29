@@ -9,31 +9,27 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "CS2 is x64 only. Configure with -A x64.")
 endif()
 
-include(FetchContent)
+# ---- MinHook (vendored, deps/minhook) --------------------------------
+add_library(minhook STATIC
+    deps/minhook/src/buffer.c
+    deps/minhook/src/hook.c
+    deps/minhook/src/trampoline.c
+    deps/minhook/src/hde/hde64.c)
+target_include_directories(minhook PUBLIC deps/minhook/include)
 
-# ---- MinHook -----------------------------------------------------------
-FetchContent_Declare(minhook
-    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG        master)
-FetchContent_MakeAvailable(minhook)
-
-# ---- Dear ImGui --------------------------------------------------------
-FetchContent_Declare(imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        docking)
-FetchContent_MakeAvailable(imgui)
-
+# ---- Dear ImGui (vendored FORK, deps/imgui) --------------------------
+# Deliberately NOT FetchContent: the neverlose UI port edits ImGui's own
+# widget bodies, so a fetched pristine copy would drop every change.
 add_library(imgui STATIC
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/imgui_demo.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp)
+    deps/imgui/imgui.cpp
+    deps/imgui/imgui_draw.cpp
+    deps/imgui/imgui_tables.cpp
+    deps/imgui/imgui_widgets.cpp
+    deps/imgui/backends/imgui_impl_win32.cpp
+    deps/imgui/backends/imgui_impl_dx11.cpp)
 target_include_directories(imgui PUBLIC
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends)
+    deps/imgui
+    deps/imgui/backends)
 target_link_libraries(imgui PUBLIC d3d11 dxgi d3dcompiler)
 
 # ---- payload -----------------------------------------------------------
