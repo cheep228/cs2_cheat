@@ -1465,6 +1465,7 @@ static void             UpdateSettings();
 static int              UpdateWindowManualResize(ImGuiWindow* window, int* border_hovered, int* border_held, int resize_grip_count, ImU32 resize_grip_col[4], const ImRect& visibility_rect);
 static void             RenderWindowOuterBorders(ImGuiWindow* window);
 static void             RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar_rect, bool title_bar_is_highlight, bool handle_borders_and_resize_grips, int resize_grip_count, const ImU32 resize_grip_col[4], float resize_grip_draw_size);
+static void             RenderMainWindowDecorations(ImGuiWindow* window, const ImRect& title_bar_rect, bool title_bar_is_highlight, bool handle_borders_and_resize_grips, int resize_grip_count, const ImU32 resize_grip_col[4], float resize_grip_draw_size); // NL PORT
 static void             RenderWindowTitleBarContents(ImGuiWindow* window, const ImRect& title_bar_rect, const char* name, bool* p_open);
 static void             RenderDimmedBackgroundBehindWindow(ImGuiWindow* window, ImU32 col);
 static void             RenderDimmedBackgrounds();
@@ -1689,6 +1690,11 @@ void ImGuiStyle::ScaleAllSizes(float scale_factor)
 
 ImGuiIO::ImGuiIO()
 {
+    // NL PORT: neverlose multiplies every menu dimension by GUIScale; hooks.cpp
+    // in the original sets it to 1 right after CreateContext.
+    GUIScale = 1.0f;
+    AnimationSpeed = 1.0f;
+
     // Most fields are initialized with zero
     memset((void*)this, 0, sizeof(*this));
     IM_STATIC_ASSERT(IM_COUNTOF(ImGuiIO::MouseDown) == ImGuiMouseButton_COUNT && IM_COUNTOF(ImGuiIO::MouseClicked) == ImGuiMouseButton_COUNT);
@@ -7754,6 +7760,139 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
     window->DC.NavLayerCurrent = ImGuiNavLayer_Main;
 }
 
+// NL PORT: ported verbatim from the neverlose CS:GO fork (ImGui/imgui.cpp).
+// Draws the whole main-window shape: sidebar, header rule, bottom user strip and
+// the logo. Every dimension below is the original one, unchanged.
+void ImGui::RenderMainWindowDecorations(ImGuiWindow* window, const ImRect& title_bar_rect, bool title_bar_is_highlight, bool handle_borders_and_resize_grips, int resize_grip_count, const ImU32 resize_grip_col[4], float resize_grip_draw_size)
+{
+    ImGuiContext& g = *GImGui;
+    IM_UNUSED(title_bar_rect); IM_UNUSED(title_bar_is_highlight);
+    IM_UNUSED(handle_borders_and_resize_grips); IM_UNUSED(resize_grip_count);
+    IM_UNUSED(resize_grip_col); IM_UNUSED(resize_grip_draw_size);
+
+    // Ensure that ScrollBar doesn't read last frame's SkipItems
+    IM_ASSERT( window->BeginCount == 0 );
+    window->SkipItems = false;
+
+    // NL PORT: the original calls DrawBackgroundBlur() here. That is a compiled
+    // DX9 pixel shader (blur.cpp / blur_x.h / blur_y.h) and this project renders
+    // through D3D11, so the blur is left out until it is reimplemented.
+
+    int w = (int)(180 * g.IO.GUIScale);
+    int h = (int)(50 * g.IO.GUIScale);
+    window->DrawList->AddRectFilled( window->Pos, window->Pos + ImVec2( (float)w, window->Size.y ), ImColor( Colors::LeftBar.x, Colors::LeftBar.y, Colors::LeftBar.z, Colors::LeftBar.w * 0.85f ), 4.f, ImDrawFlags_RoundCornersLeft ); // NL PORT: ImGui 1.93 compatibility (was ImDrawCornerFlags_Left)
+    window->DrawList->AddRectFilled( window->Pos + ImVec2( (float)w, 0 ), window->Pos + window->Size, ImColor( Colors::Background ), 4.f, ImDrawFlags_RoundCornersRight ); // NL PORT: ImGui 1.93 compatibility (was ImDrawCornerFlags_Right)
+    window->DrawList->AddLine( window->Pos + ImVec2( (float)w, (float)h ), window->Pos + ImVec2( window->Size.x, (float)h ), ImColor( Colors::Borders ) );
+
+    window->DrawList->AddLine( window->Pos + ImVec2( 0, window->Size.y - h ), window->Pos + ImVec2( (float)w, window->Size.y - h ), ImColor( Colors::Borders ), 2 );
+    window->DrawList->AddCircleFilled(window->Pos + ImVec2(29 * g.IO.GUIScale, 595 * g.IO.GUIScale), 17.f * g.IO.GUIScale, ImColor(255, 255, 255), 360);
+    window->DrawList->AddText(window->Pos + ImVec2(55 * g.IO.GUIScale, 578 * g.IO.GUIScale), ImColor(Colors::TextActive), Colors::username.c_str());
+    window->DrawList->AddText(window->Pos + ImVec2(55 * g.IO.GUIScale, 595 * g.IO.GUIScale), ImColor(Colors::AccentDisabled), "Till:");
+    window->DrawList->AddText(window->Pos + ImVec2(80 * g.IO.GUIScale, 595 * g.IO.GUIScale), ImColor(Colors::Accent), "31.12 23:59");
+
+    auto Logo = "4FIR";
+    // NL PORT: original pushes Fonts[1] (museosanscyrl-900 @30px). That asset is
+    // not shipped with the sources, so the push is guarded until it is supplied.
+    const bool has_logo_font = g.IO.Fonts->Fonts.Size > 1;
+    if (has_logo_font)
+        ImGui::PushFont( g.IO.Fonts->Fonts[ 1 ], 0.0f ); // NL PORT: ImGui 1.93 compatibility (PushFont takes a size)
+    if (Colors::theme != 2)
+        window->DrawList->AddText(window->Pos + ImVec2(w / 2.f - CalcTextSize(Logo).x / 2.f - 1, 14), ImColor(Colors::Accent), Logo);
+    window->DrawList->AddText( window->Pos + ImVec2( w / 2.f - CalcTextSize( Logo ).x / 2.f, 15 ), ImColor( Colors::Logo ), Logo );
+    if (has_logo_font)
+        ImGui::PopFont( );
+}
+
+// NL PORT: the original ships MainBegin() as a full copy of Begin() differing in
+// exactly one call (verified: 649 lines each, one differing line). Reproduced as
+// the flag plus Begin(), which is the same behaviour without duplicating 1.87
+// internals into 1.93.  // NL PORT: ImGui 1.93 compatibility
+bool ImGui::MainBegin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+{
+    ImGuiContext& g = *GImGui;
+    g.NLMainWindowDecorations = true;
+    bool ret = Begin(name, p_open, flags);
+    g.NLMainWindowDecorations = false;
+    return ret;
+}
+
+// NL PORT: ported from the neverlose fork. A child window that paints its own
+// panel behind itself, with the caption sitting in a 30 px header above the
+// child origin and the content pushed down by 15 px.
+bool ImGui::MenuChildEx( const char* name, ImGuiID id, const ImVec2& size_arg, bool border, ImGuiWindowFlags flags )
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* parent_window = g.CurrentWindow;
+
+    flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_ChildWindow;
+    flags |= ( parent_window->Flags & ImGuiWindowFlags_NoMove );  // Inherit the NoMove flag
+
+    // Size
+    const ImVec2 content_avail = GetContentRegionAvail( );
+    ImVec2 size = ImTrunc( size_arg ); // NL PORT: ImGui 1.93 compatibility (was ImFloor)
+    if ( size.x <= 0.0f )
+        size.x = ImMax( content_avail.x + size.x, 4.0f ); // Arbitrary minimum child size (0.0f causing too much issues)
+    if ( size.y <= 0.0f )
+        size.y = ImMax( content_avail.y + size.y, 4.0f );
+    SetNextWindowSize( size );
+
+    // Build up name. If you need to append to a same child from multiple location in the ID stack, use BeginChild(ImGuiID id) with a stable value.
+    // NL PORT: ImGui 1.93 compatibility - g.TempBuffer is an ImVector<char> now.
+    g.TempBuffer.reserve(256);
+    if ( name )
+        ImFormatString( g.TempBuffer.Data, (size_t)g.TempBuffer.Capacity, "%s/%s_%08X", parent_window->Name, name, id );
+    else
+        ImFormatString( g.TempBuffer.Data, (size_t)g.TempBuffer.Capacity, "%s/%08X", parent_window->Name, id );
+
+    const float backup_border_size = g.Style.ChildBorderSize;
+    if ( !border )
+        g.Style.ChildBorderSize = 0.0f;
+    bool ret = Begin( g.TempBuffer.Data, NULL, flags );
+    g.Style.ChildBorderSize = backup_border_size;
+
+    ImGuiWindow* child_window = g.CurrentWindow;
+    child_window->ChildId = id;
+    // NL PORT: ImGui 1.93 compatibility - AutoFitChildAxises was removed upstream.
+
+    // Set the cursor to handle case where the user called SetNextWindowPos()+BeginChild() manually.
+    // While this is not really documented/defined, it seems that the expected thing to do.
+    if ( child_window->BeginCount == 1 )
+        parent_window->DC.CursorPos = child_window->Pos;
+
+    child_window->DC.CursorPos += ImVec2( 0, 15 );
+    // Process navigation-in immediately so NavInit can run on first frame
+    // NL PORT: ImGui 1.93 compatibility - ImGuiWindowFlags_NavFlattened moved to
+    // ImGuiChildFlags, DC.NavHasScroll became DC.NavWindowHasScrollY, and
+    // ImGuiInputSource_Nav was replaced by g.NavInputSource. Condition and body
+    // are otherwise the original.
+    if ( g.NavActivateId == id && ( child_window->DC.NavLayersActiveMask != 0 || child_window->DC.NavWindowHasScrollY ) )
+    {
+        FocusWindow( child_window );
+        NavInitWindow( child_window, false );
+        SetActiveID( id + 1, child_window ); // Steal ActiveId with another arbitrary id so that key-press won't activate child item
+        g.ActiveIdSource = g.NavInputSource;
+    }
+
+    parent_window->DrawList->AddRectFilled( child_window->Pos - ImVec2(0.f, 30.f), child_window->Pos + size_arg, ImColor( Colors::Child ), 4.f );
+    parent_window->DrawList->AddLine( child_window->Pos + ImVec2( 5, 0 ), child_window->Pos + ImVec2(size_arg.x - 5, 0 ), ImColor( Colors::Borders ), 2 );
+    // NL PORT: original pushes Fonts[2] (museosanscyrl-700 @16px); asset missing.
+    const bool has_head_font = g.IO.Fonts->Fonts.Size > 2;
+    if (has_head_font)
+        ImGui::PushFont( g.IO.Fonts->Fonts[ 2 ], 0.0f ); // NL PORT: ImGui 1.93 compatibility
+    parent_window->DrawList->AddText( child_window->Pos + ImVec2( 10, -15 - CalcTextSize(name).y / 2.f ), ImColor( Colors::ChildText ), name );
+    if (has_head_font)
+        ImGui::PopFont( );
+
+    return ret;
+}
+
+bool ImGui::MenuChild( const char* str_id, const ImVec2& size_arg, bool border, ImGuiWindowFlags extra_flags )
+{
+    ImGuiWindow* window = GetCurrentWindow( );
+    return MenuChildEx( str_id, window->GetID( str_id ), size_arg, border, extra_flags );
+}
+
+
 // When inside a dock node, this is handled in DockNodeCalcTabBarLayout() instead.
 // Render title text, collapse button, close button
 void ImGui::RenderWindowTitleBarContents(ImGuiWindow* window, const ImRect& title_bar_rect, const char* name, bool* p_open)
@@ -8613,7 +8752,15 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
             // Handle title bar, scrollbar, resize grips and resize borders
             const ImGuiWindow* window_to_highlight = g.NavWindowingTarget ? g.NavWindowingTarget : g.NavWindow;
             const bool title_bar_is_highlight = want_focus || (window_to_highlight && (window->RootWindowForTitleBarHighlight == window_to_highlight->RootWindowForTitleBarHighlight || (window->DockNode && window->DockNode == window_to_highlight->DockNode)));
-            RenderWindowDecorations(window, title_bar_rect, title_bar_is_highlight, handle_borders_and_resize_grips, resize_grip_count, resize_grip_col, resize_grip_draw_size);
+            // NL PORT: the original fork ships MainBegin(), a copy of Begin() whose
+            // only semantic difference is this one call (verified by diffing its
+            // MainBegin against its Begin: 649 lines each, 1 differing line). Copying
+            // all of 1.87's Begin() into 1.93 would be a merge hazard for no gain, so
+            // the swap happens here instead. // NL PORT: ImGui 1.93 compatibility
+            if (g.NLMainWindowDecorations)
+                RenderMainWindowDecorations(window, title_bar_rect, title_bar_is_highlight, handle_borders_and_resize_grips, resize_grip_count, resize_grip_col, resize_grip_draw_size);
+            else
+                RenderWindowDecorations(window, title_bar_rect, title_bar_is_highlight, handle_borders_and_resize_grips, resize_grip_count, resize_grip_col, resize_grip_draw_size);
 
             if (render_decorations_in_parent)
                 window->DrawList = &window->DrawListInst;

@@ -46,6 +46,8 @@ Index of this file:
 
 // System includes
 #include <stdint.h>     // intptr_t
+#include <map>          // NL PORT: per-id widget animation state
+#include <string>       // NL PORT: Checkbox builds a second id from the label
 
 //-------------------------------------------------------------------------
 // Warnings
@@ -1248,6 +1250,9 @@ bool ImGui::ImageButton(ImTextureID user_texture_id, const ImVec2& size, const I
 */
 #endif // #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
 
+// NL PORT: body replaced with the neverlose fork's Checkbox. It is a sliding
+// pill switch pinned to the right edge of the column, not a tick box, and it
+// carries its own per-id animation state. Kept line-for-line with the original.
 bool ImGui::Checkbox(const char* label, bool* v)
 {
     ImGuiWindow* window = GetCurrentWindow();
@@ -1257,71 +1262,115 @@ bool ImGui::Checkbox(const char* label, bool* v)
     ImGuiContext& g = *GImGui;
     const ImGuiStyle& style = g.Style;
     const ImGuiID id = window->GetID(label);
-    const char* label_end = FindRenderedTextEnd(label);
-    const ImVec2 label_size = CalcTextSize(label, label_end, false);
+    const ImGuiID id_mark = window->GetID(std::string(std::string(label) + "_mark").c_str());
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
 
+    const float square_sz2 = ImGui::GetColumnWidth();
     const float square_sz = GetFrameHeight();
     const ImVec2 pos = window->DC.CursorPos;
-    const ImRect total_bb(pos, pos + ImVec2(square_sz + (label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f), label_size.y + style.FramePadding.y * 2.0f));
+    const ImRect total_bb(pos, pos + ImVec2(square_sz + (label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f), label_size.y + style.FramePadding.y * 2.0f + 5.f));
+    const ImRect checkmark_bb(pos + ImVec2(square_sz2 - 35.f, 0), pos + ImVec2(square_sz2 - 10.f, label_size.y + style.FramePadding.y * 2.0f + 5.f));
     ItemSize(total_bb, style.FramePadding.y);
-    const bool is_visible = ItemAdd(total_bb, id);
-    const bool is_multi_select = (g.LastItemData.ItemFlags & ImGuiItemFlags_IsMultiSelect) != 0;
-    if (!is_visible)
-        if (!is_multi_select || !g.BoxSelectState.UnclipMode || !g.BoxSelectState.UnclipRect.Overlaps(total_bb)) // Extra layer of "no logic clip" for box-select support
-        {
-            IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags | ImGuiItemStatusFlags_Checkable | (*v ? ImGuiItemStatusFlags_Checked : 0));
-            return false;
-        }
-
-    // Range-Selection/Multi-selection support (header)
-    bool checked = *v;
-    if (is_multi_select)
-        MultiSelectItemHeader(id, &checked, NULL);
+    const bool can_add = ItemAdd(total_bb, id);
+    IM_UNUSED(can_add);
 
     bool hovered, held;
     bool pressed = ButtonBehavior(total_bb, id, &hovered, &held);
 
-    // Range-Selection/Multi-selection support (footer)
-    if (is_multi_select)
-        MultiSelectItemFooter(id, &checked, &pressed, ImGuiMultiSelectFlags_CheckboxMode_);
-    else if (pressed)
-        checked = !checked;
-
-    if (*v != checked)
+    bool hovered_mark, held_mark;
+    bool pressed_mark = ButtonBehavior(checkmark_bb, id_mark, &hovered_mark, &held_mark);
+    if (pressed || pressed_mark)
     {
-        *v = checked;
-        pressed = true; // return value
+        *v = !(*v);
         MarkItemEdited(id);
     }
 
-    const ImRect check_bb(pos, pos + ImVec2(square_sz, square_sz));
-    const bool mixed_value = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
-    if (is_visible)
-    {
-        RenderNavCursor(total_bb, id);
-        ImU32 bg_col = GetColorU32((held && hovered) ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : (mixed_value || checked) ? ImGuiCol_CheckboxSelectedBg : ImGuiCol_FrameBg);
-        ImU32 check_col = GetColorU32(ImGuiCol_CheckMark);
-        RenderFrame(check_bb.Min, check_bb.Max, bg_col, true, style.FrameRounding);
-        if (mixed_value)
-        {
-            // Undocumented tristate/mixed/indeterminate checkbox (#2644)
-            // This may seem awkwardly designed because the aim is to make ImGuiItemFlags_MixedValue supported by all widgets (not just checkbox)
-            ImVec2 pad(ImMax(1.0f, IM_TRUNC(square_sz / 3.6f)), ImMax(1.0f, IM_TRUNC(square_sz / 3.6f)));
-            window->DrawList->AddRectFilled(check_bb.Min + pad, check_bb.Max - pad, check_col, style.FrameRounding);
-        }
-        else if (*v)
-        {
-            const float pad = ImMax(1.0f, IM_TRUNC(square_sz / 6.0f));
-            RenderCheckMark(window->DrawList, check_bb.Min + ImVec2(pad, pad), check_col, square_sz - pad * 2.0f);
-        }
+    struct TabAnimation {
+        ImColor CheckboxFrame;
+        ImColor CircleFrame;
+        ImColor Text;
+        float CirclePos;
+    };
+
+    static std::map< ImGuiID, TabAnimation > TabMap;
+    auto TabItemMap = TabMap.find(id);
+    if (TabItemMap == TabMap.end()) {
+        TabMap.insert({ id, TabAnimation() });
+        TabItemMap = TabMap.find(id);
     }
-    const ImVec2 label_pos = ImVec2(check_bb.Max.x + style.ItemInnerSpacing.x, check_bb.Min.y + style.FramePadding.y);
-    if (g.LogEnabled)
-        LogRenderedText(&label_pos, mixed_value ? "[~]" : *v ? "[x]" : "[ ]");
-    if (is_visible && label_size.x > 0.0f)
-        RenderText(label_pos, label, label_end, false);
+    TabItemMap->second.CheckboxFrame = ImLerp(TabItemMap->second.CheckboxFrame.Value, *v ? Colors::FrameActive : Colors::Frame, g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
+    TabItemMap->second.CircleFrame = ImLerp(TabItemMap->second.CircleFrame.Value, *v ? Colors::Accent : Colors::AccentDisabled, g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
+    TabItemMap->second.Text = ImLerp(TabItemMap->second.Text.Value, *v ? Colors::TextActive : Colors::Text, g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
+    TabItemMap->second.CirclePos = ImLerp(TabItemMap->second.CirclePos, *v ? 21.5f : 4.5f, g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
+
+    RenderNavHighlight(total_bb, id);
+    RenderFrame(checkmark_bb.Min + ImVec2(0, 8.f), checkmark_bb.Max - ImVec2(0, 8.f), TabItemMap->second.CheckboxFrame, false, 12.f);
+    window->DrawList->AddCircleFilled(checkmark_bb.Min + ImVec2(TabItemMap->second.CirclePos, checkmark_bb.GetSize().y / 2.f), 7.f, TabItemMap->second.CircleFrame);
+
+    ImVec2 label_pos = ImVec2(total_bb.Min.x + 10.f, total_bb.GetCenter().y - CalcTextSize(label).y / 2.f);
+    if (label_size.x > 0.0f)
+        window->DrawList->AddText(label_pos, TabItemMap->second.Text, label);
 
     IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags | ImGuiItemStatusFlags_Checkable | (*v ? ImGuiItemStatusFlags_Checked : 0));
+    return pressed;
+}
+
+// NL PORT: added by the neverlose fork. The sidebar tab: 180x30, pill inset by
+// 15 px each side, icon glyph centred at x=30 and label at x=50.
+bool ImGui::TabButton(const char* icon, const char* label, bool active) {
+    ImGuiWindow* window = GetCurrentWindow();
+    if (window->SkipItems)
+        return false;
+
+    ImGuiContext& g = *GImGui;
+    const ImGuiStyle& style = g.Style;
+    const ImGuiID id = window->GetID(label);
+    const ImVec2 label_size = CalcTextSize(label, NULL, true);
+    IM_UNUSED(label_size);
+
+    ImVec2 pos = window->DC.CursorPos;
+
+    ImVec2 size = ImVec2(180 * g.IO.GUIScale, 30 * g.IO.GUIScale);
+
+    const ImRect bb(pos, pos + size);
+    ItemSize(size, style.FramePadding.y);
+    if (!ItemAdd(bb, id))
+        return false;
+
+    bool hovered, held;
+    bool pressed = ButtonBehavior(bb, id, &hovered, &held, 0);
+
+    struct TabAnimation {
+        ImColor TabFrame;
+    };
+
+    static std::map< ImGuiID, TabAnimation > TabMap;
+    auto TabItemMap = TabMap.find(id);
+    if (TabItemMap == TabMap.end()) {
+        TabMap.insert({ id, TabAnimation() });
+        TabItemMap = TabMap.find(id);
+    }
+    TabItemMap->second.TabFrame = ImLerp(TabItemMap->second.TabFrame.Value, active ? Colors::TabFrame : ImColor(Colors::TabFrame.x, Colors::TabFrame.y, Colors::TabFrame.z, 0.f).Value, g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
+
+    // Render
+    RenderNavHighlight(bb, id);
+    RenderFrame(bb.Min + ImVec2(15, 0), bb.Max - ImVec2(15, 0), TabItemMap->second.TabFrame, true, 4.f);
+
+    if (g.LogEnabled)
+        LogSetNextTextDecoration("[", "]");
+    // NL PORT: original pushes Fonts[4] (neverlose-v2-icons.ttf @18px) for the
+    // glyph. That asset is not shipped with the sources, so the icon is only
+    // drawn once an icon font is actually loaded - otherwise "A".."L" would
+    // render as literal letters next to the label.
+    if (g.IO.Fonts->Fonts.Size > 4)
+    {
+        PushFont(g.IO.Fonts->Fonts[4], 0.0f); // NL PORT: ImGui 1.93 compatibility (PushFont takes a size)
+        window->DrawList->AddText(bb.Min + ImVec2(30 - CalcTextSize(icon).x / 2.f, bb.GetSize().y / 2.f - CalcTextSize(icon).y / 2.f), ImColor(Colors::Accent), icon);
+        PopFont();
+    }
+    window->DrawList->AddText(bb.Min + ImVec2(50, bb.GetSize().y / 2.f - CalcTextSize(label).y / 2.f), ImColor(Colors::TabText), label);
+
+    IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags);
     return pressed;
 }
 

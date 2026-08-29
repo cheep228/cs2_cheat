@@ -322,6 +322,42 @@ struct ImVec4
 IM_MSVC_RUNTIME_CHECKS_RESTORE
 
 //-----------------------------------------------------------------------------
+// [SECTION] NL PORT: neverlose theme colours
+//-----------------------------------------------------------------------------
+// Ported verbatim from the neverlose CS:GO fork's imgui.h. The widget bodies in
+// imgui_widgets.cpp read these directly; cheats/menu.cpp equivalent (our
+// src/ui/menu.cpp) writes them once per frame, easing between theme presets.
+//-----------------------------------------------------------------------------
+
+#include <string>                   // NL PORT: Colors::username, was <iostream> upstream
+
+namespace Colors {
+    inline ImVec4 LeftBar;
+    inline ImVec4 Background;
+    inline ImVec4 Borders;
+    inline ImVec4 BordersActive;
+    inline ImVec4 Child;
+    inline ImVec4 ChildText;
+    inline ImVec4 TabFrame;
+    inline ImVec4 TabText;
+    inline ImVec4 Frame;
+    inline ImVec4 FrameDisabled;
+    inline ImVec4 FrameHovered;
+    inline ImVec4 FrameActive;
+    inline ImVec4 FrameOpened;
+    inline ImVec4 Logo;
+    inline ImVec4 AccentDisabled;
+    inline ImVec4 Accent;
+
+    inline ImVec4 Text;
+    inline ImVec4 TextDisabled;
+    inline ImVec4 TextActive;
+
+    inline int theme;
+    inline std::string username;
+}
+
+//-----------------------------------------------------------------------------
 // [SECTION] Texture identifiers (ImTextureID, ImTextureRef)
 //-----------------------------------------------------------------------------
 
@@ -440,6 +476,9 @@ namespace ImGui
     //    BeginXXX function returned true. Begin and BeginChild are the only odd ones out. Will be fixed in a future update.]
     // - Note that the bottom of window stack always contains a window called "Debug".
     IMGUI_API bool          Begin(const char* name, bool* p_open = NULL, ImGuiWindowFlags flags = 0);
+    // NL PORT: neverlose menu entry points.
+    IMGUI_API bool          MainBegin(const char* name, bool* p_open = NULL, ImGuiWindowFlags flags = 0);
+    IMGUI_API bool          MenuChild(const char* str_id, const ImVec2& size = ImVec2(0, 0), bool border = false, ImGuiWindowFlags flags = 0);
     IMGUI_API void          End();
 
     // Child Windows
@@ -645,6 +684,7 @@ namespace ImGui
     IMGUI_API bool          InvisibleButton(const char* str_id, const ImVec2& size, ImGuiButtonFlags flags = 0); // flexible button behavior without the visuals, frequently useful to build custom behaviors using the public api (along with IsItemActive, IsItemHovered, etc.)
     IMGUI_API bool          ArrowButton(const char* str_id, ImGuiDir dir);                  // square button with an arrow shape
     IMGUI_API bool          Checkbox(const char* label, bool* v);
+    IMGUI_API bool          TabButton(const char* icon, const char* label, bool active); // NL PORT
     IMGUI_API bool          CheckboxFlags(const char* label, int* flags, int flags_value);
     IMGUI_API bool          CheckboxFlags(const char* label, unsigned int* flags, unsigned int flags_value);
     IMGUI_API bool          RadioButton(const char* label, bool active);                    // use with e.g. if (RadioButton("one", my_value==1)) { my_value = 1; }
@@ -2583,6 +2623,11 @@ struct ImGuiIO
     bool        ConfigIniSettingsSaveLastUsedDate;// = true         // Enable loading/saving last used day (YYYYMMDD) in some .ini struct, making things easier to audit and allowing custom tools to cleanup old data.
     int         ConfigIniSettingsAutoDiscardMonths; // = 0          // [BETA] Set number of months after which unused .ini entries are discarded on load. Require platform_io.Platform_SessionDate to be set. For systems supporting the feature, .ini entries without a LastUsed field will always be discarded! Please report if you are using this.
     bool        ConfigDebugIniSettings;         // = false          // Save .ini data with extra comments (particularly helpful for Docking, but makes saving slower)
+
+    // NL PORT: fields the neverlose UI multiplies into every size and every
+    // easing step. Keeping the names means the ported bodies read unchanged.
+    float       GUIScale;                       // = 1.0f  // Scale applied to every hardcoded menu dimension.
+    float       AnimationSpeed = 1.f;           // = 1.0f  // Multiplier on every widget interpolation.
 
     // Miscellaneous options
     // (you can visualize and interact with all options in 'Demo->Configuration')

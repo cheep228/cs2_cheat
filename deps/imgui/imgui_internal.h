@@ -2446,6 +2446,7 @@ struct ImGuiContext
 {
     bool                    Initialized;
     bool                    WithinFrameScope;                   // Set by NewFrame(), cleared by EndFrame()
+    bool                    NLMainWindowDecorations;            // NL PORT: MainBegin() sets this so Begin() draws the neverlose main-window chrome
     bool                    WithinFrameScopeWithImplicitWindow; // Set by NewFrame(), cleared by EndFrame() when the implicit debug window has been pushed
     bool                    TestEngineHookItems;                // Will call test engine hooks: ImGuiTestEngineHook_ItemAdd(), ImGuiTestEngineHook_ItemInfo(), ImGuiTestEngineHook_Log()
     int                     FrameCount;
@@ -3740,6 +3741,8 @@ namespace ImGui
 
     // Childs
     IMGUI_API bool          BeginChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, ImGuiChildFlags child_flags, ImGuiWindowFlags window_flags);
+    IMGUI_API bool          MenuChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, bool border, ImGuiWindowFlags flags); // NL PORT
+    IMGUI_API void          RenderMainWindowDecorations(ImGuiWindow* window, const ImRect& title_bar_rect, bool title_bar_is_highlight, bool handle_borders_and_resize_grips, int resize_grip_count, const ImU32 resize_grip_col[4], float resize_grip_draw_size); // NL PORT
     IMGUI_API ImGuiWindow*  FindFrontMostVisibleChildWindow(ImGuiWindow* window);
 
     // Popups, Modals
