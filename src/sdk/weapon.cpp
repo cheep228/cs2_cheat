@@ -109,6 +109,8 @@ Active Local(uintptr_t localPawn) {
     a.info = &ById(defIndex);
     a.accuracyPenalty = mem::Read<float>(wep + schema::m_fAccuracyPenalty);
     a.reloading = mem::Read<bool>(wep + schema::m_bInReload);
+    a.clip = mem::Read<int32_t>(wep + schema::m_iClip1);
+    a.nextAttackTick = mem::Read<int32_t>(wep + schema::m_nNextPrimaryAttackTick);
     a.scoped = mem::Read<bool>(localPawn + schema::m_bIsScoped);
 
     // A wild penalty means the offset moved; treat it as "no live spread data"

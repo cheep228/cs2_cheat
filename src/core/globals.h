@@ -27,6 +27,8 @@ struct EspGroup {
     bool  health    = true;
     bool  distance  = false;
     bool  snapline  = false;
+    bool  weapon    = false;
+    bool  flags     = false;
     int   boxType   = BoxCorners;
     ImVec4 color    = ImVec4(1.f, 0.35f, 0.35f, 1.f);
 
@@ -35,6 +37,8 @@ struct EspGroup {
 
     bool   aimHistory      = false;
     ImVec4 aimHistoryColor = ImVec4(0.45f, 0.85f, 1.00f, 0.65f);
+
+    ImVec4 flagsColor = ImVec4(1.00f, 0.80f, 0.35f, 1.f);
 
     bool   glow      = false;
     ImVec4 glowColor = ImVec4(1.00f, 0.30f, 0.30f, 1.f);
@@ -181,6 +185,16 @@ struct Aimbot {
     bool  onBots    = true;
     bool  requireAlive = true;
 
+    // Skips enemies the game itself does not consider visible to us. Backed by
+    // the spotted mask the server replicates, not by a ray trace - see
+    // sdk/visibility.h for what that does and does not answer.
+    bool  visibilityCheck = false;
+
+    // Writes the aim into the command's input history instead of the camera,
+    // so the shot resolves against the target while the view stays put. Needs
+    // the CreateMove hook; the panel says so when it is not installed.
+    bool  silentAim = false;
+
     // Which hitboxes are candidates. The closest enabled one wins.
     bool parts[PartCount] = { false, true, false, false, false, false, false, false };
 
@@ -188,6 +202,106 @@ struct Aimbot {
     ImVec4 fovColor    = ImVec4(1.f, 1.f, 1.f, 0.25f);
     bool   drawTarget  = false;
     ImVec4 targetColor = ImVec4(1.f, 0.85f, 0.2f, 1.f);
+};
+
+// Local-only visual suppression. Neither of these touches the entity's game
+// logic: anti-smoke rewrites the smoke projectile's own render-start tick, and
+// anti-flash clamps the local pawn's flash overlay alpha. Both are restored
+// when the option goes back off.
+// Compensates the weapon's own recoil by pulling the view back against the
+// punch the game reports. Recoil is the systematic part of where the gun goes;
+// spread is the random part of a single bullet, and this deliberately does not
+// touch it - full strength still leaves the cone.
+struct RecoilControl {
+    bool enabled = false;
+
+    // Per-axis strength, 0..100 %. 100 cancels that component of the punch.
+    int  vertical   = 100;
+    int  horizontal = 70;
+
+    // Leaves the first shots alone; the spray only becomes systematic after
+    // the first couple of rounds.
+    int  startAfterShots = 2;
+
+    // 0 applies the whole correction on the command it is computed; higher
+    // spreads it over following commands. Not a sleep - an interpolation
+    // driven by the command pipeline.
+    int  smooth = 0;
+
+    // How the punch maps onto the view. Left at 1.0 because CS2's
+    // m_aimPunchAngle is already in view degrees; exposed rather than baked in
+    // so it can be checked against the game instead of assumed.
+    float scale = 1.0f;
+};
+
+// Fires when the player's own view ray actually crosses an enemy hitbox.
+// Lives in the command path, so both the delay and the fire rate follow game
+// ticks rather than the frame rate.
+struct TriggerBot {
+    bool enabled = false;
+
+    // 0 = always armed; anything else is a hold key.
+    int  key = VK_MENU;   // left alt
+
+    // How long the same target must stay under the ray before the shot.
+    int  delayMs = 0;
+
+    bool teamCheck = true;
+    bool visibilityCheck = false;
+
+    // Head, Chest, Stomach, Arms, Legs - see triggerbot::HitGroup.
+    bool groups[5] = { true, true, true, false, false };
+};
+
+// Written into the user command inside CreateMove. Needs the game hooks; with
+// them off both options are inert.
+struct Movement {
+    // Takes the jump away while airborne so the next landing starts a new one.
+    // Never presses jump by itself - space still has to be held.
+    bool bhop = false;
+
+    // Strafes into the turn the mouse is already making.
+    bool autoStrafe = false;
+
+    // What to do when the mouse is NOT turning. Mouse-only leaves movement
+    // alone; directional keeps the gain going by alternating sides on a fixed
+    // number of commands, which is tick-based and so fps-independent.
+    int  strafeMode = 0;   // movement::StrafeMode
+};
+
+struct World {
+    bool antiSmoke = false;
+
+    bool antiFlash = false;
+    // 0 = no flash at all, 100 = the game's normal flash.
+    int  flashAmount = 0;
+
+    // Planted C4. The ESP is just a marker and a label; the timer adds the
+    // seconds left before detonation, taken from the bomb's own blow time.
+    bool   bombEsp   = false;
+    bool   bombTimer = false;
+    ImVec4 bombColor = ImVec4(1.00f, 0.45f, 0.10f, 1.f);
+};
+
+// A guard rail over the legit aimbot rather than a separate config file. While
+// it is on, the legit settings are clamped to modest values and the widgets
+// that would exceed them are locked. The user's own values are stashed on the
+// way in and put back on the way out.
+struct SafeSettings {
+    bool enabled = false;
+
+    // Limits. Semantics verified against features/aimbot.cpp: fov is an
+    // angular radius in degrees (smaller = tighter) and smooth is a divisor,
+    // so a LARGER smooth means a slower drag. Hence a max on fov and a
+    // minimum on smooth.
+    static constexpr float kMaxFov    = 3.f;
+    static constexpr float kMinSmooth = 8.f;
+
+    // Stashed user values, only meaningful while `saved` is true.
+    bool  saved = false;
+    float prevFov = 0.f;
+    float prevSmooth = 0.f;
+    bool  prevVisibilityCheck = false;
 };
 
 struct Config {
@@ -200,15 +314,21 @@ struct Config {
     bool      espEnabled  = true;
     bool      teamCheck   = true;   // do not draw teammates
     float     maxDistance = 250.f;  // meters
-    EspGroup  players;              // real humans
-    EspGroup  bots;                 // fake clients (steamID == 0)
+    // One group for every player pawn. Bots are players; nothing about a fake
+    // client changes how it should be drawn, so there is no second group.
+    EspGroup  players;
 
     float aimHistoryDelayMs = 50.f; // how far the ghost skeleton trails
     float skeletonThickness = 1.4f;
 
-    Aimbot     aim;
-    Ragebot    rage;
-    GlowTuning glowTune;
+    Aimbot       aim;
+    Ragebot      rage;
+    GlowTuning   glowTune;
+    RecoilControl recoil;
+    TriggerBot   trigger;
+    Movement     movement;
+    World        world;
+    SafeSettings safe;
 
     // Misc
     bool  watermark = true;

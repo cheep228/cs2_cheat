@@ -9,6 +9,8 @@
 #include "sdk/entitylist.h"
 #include "sdk/math.h"
 #include "sdk/offsets.h"
+#include "sdk/trace.h"
+#include "sdk/visibility.h"
 
 namespace {
 
@@ -84,6 +86,11 @@ void Run() {
 
     const uintptr_t entityList = mem::Read<uintptr_t>(g::client + offsets::dwEntityList);
     const uintptr_t localPawn = mem::Read<uintptr_t>(g::client + offsets::dwLocalPlayerPawn);
+
+    // Which bit in an enemy's spotted mask belongs to us. Cached inside; this
+    // only does real work on a map change or reconnect.
+    visibility::Update(entityList,
+                       mem::Read<uintptr_t>(g::client + offsets::dwLocalPlayerController));
     if (!mem::Valid(entityList) || !mem::Valid(localPawn)) {
         state = fresh;
         return;
@@ -122,14 +129,32 @@ void Run() {
                 continue;
 
             const int bone = BoneForPart(part);
-            const Vector3 point = bones::Position(p.pawn, bone);
+
+            // AimPoint lifts the head off its joint and into the middle of the
+            // hitbox; every other bone is aimed at directly. Both the bone
+            // index and the lift are fixed in sdk/bones.h.
+            const Vector3 point = bones::AimPoint(p.pawn, bone);
             if (point.IsZero())
                 continue;
+
+            if (part == cfg::PartHead)
+                fresh.headBone = bone;
 
             const Angle want = CalcAngle(eye, point);
             const float fov = AngleDelta(want, current);
             if (fov >= bestFov)
                 continue;
+
+            // Visibility comes from the game's own spotted mask, not from a
+            // trace: this project has no ray trace, and the old gate was
+            // guarded by trace::Available(), which is always false - so the
+            // option did nothing at all. See sdk/visibility.h for the limits.
+            if (a.visibilityCheck && visibility::Available()) {
+                if (!visibility::IsVisible(p.pawn)) {
+                    ++fresh.rejectedOccluded;
+                    continue;
+                }
+            }
 
             bestFov = fov;
             best = want;
@@ -139,6 +164,7 @@ void Run() {
             fresh.targetPart = part;
             fresh.targetFov = fov;
 
+            fresh.targetWorld = point;
             const Matrix4x4 view = mem::Read<Matrix4x4>(g::client + offsets::dwViewMatrix);
             WorldToScreen(view, point, fresh.targetScreen, g::screenW, g::screenH);
         }
@@ -146,11 +172,37 @@ void Run() {
 
     if (found) {
         const Angle applied = Smooth(current, best, a.smooth);
-        Vector2 out{ applied.pitch, applied.yaw };
-        mem::Write<Vector2>(g::client + offsets::dwViewAngles, out);
+        fresh.desiredAngle = applied;
+
+        if (a.silentAim) {
+            // Deliberately does NOT touch the camera. The angle is handed to
+            // CreateMove, which writes it into the command's input history -
+            // the shot resolves there while the view stays where the player
+            // put it. Writing dwViewAngles here as well would snap the camera
+            // and defeat the whole point.
+            fresh.silentPending = true;
+        } else {
+            Vector2 out{ applied.pitch, applied.yaw };
+            mem::Write<Vector2>(g::client + offsets::dwViewAngles, out);
+        }
     }
 
     state = fresh;
+}
+
+void ApplyToCommand(usercmd::UserCmd* cmd) {
+    if (!cmd || !state.silentPending || !state.hasTarget)
+        return;
+
+    const Vector3 angle{ state.desiredAngle.pitch, state.desiredAngle.yaw, 0.f };
+
+    // The shot angle lives in the input history entries. If the command has
+    // none this tick there is nothing to write, and forcing the visible angle
+    // instead would turn a silent aim into a visible snap - so it is skipped.
+    if (cmd->SetShootAngle(angle) > 0)
+        cmd->AimAttackAtNewestHistory();
+
+    state.silentPending = false;
 }
 
 void Draw(ImDrawList* d, int screenW, int screenH) {

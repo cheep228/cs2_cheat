@@ -19,6 +19,16 @@ inline constexpr int kDumpBuild = 14178;
 inline ptrdiff_t dwEntityList            = 0x2571230;
 inline ptrdiff_t dwLocalPlayerPawn       = 0x23C6268;
 inline ptrdiff_t dwLocalPlayerController = 0x23A0F30;
+
+// client.dll global vars. Only the current game time is read from it, and only
+// by the bomb timer; everything else in the project is time-independent.
+// Resolved by signature - the baked value is a starting guess and the timer
+// hides itself rather than showing nonsense when it does not validate.
+inline ptrdiff_t dwGlobalVars            = 0x20AF5F0;
+
+// Offset of m_flCurrentTime inside CGlobalVarsBase. Validated at runtime
+// against the bomb's own blow time, see features/world.cpp.
+inline ptrdiff_t kGlobalCurTime          = 0x2C;
 inline ptrdiff_t dwViewMatrix            = 0x23CB830;
 inline ptrdiff_t dwViewAngles            = 0x23DC308;
 
@@ -59,10 +69,30 @@ inline ptrdiff_t m_angEyeAngles                = 0x3350;
 // C_BaseEntity
 inline ptrdiff_t m_vecVelocity                 = 0x430;
 
+// C_BaseEntity::m_MoveType. Autostrafe only makes sense while actually
+// falling: on a ladder, in noclip or swimming the air-accel rules do not
+// apply and forcing a strafe there just fights the player.
+inline ptrdiff_t m_MoveType                    = 0x3D0;
+
 // C_CSPlayerPawn
 inline ptrdiff_t m_ArmorValue                  = 0x1CA4;
 inline ptrdiff_t m_bIsScoped                   = 0x1C78;
 inline ptrdiff_t m_iShotsFired                 = 0x1C8C;
+
+// C_CSPlayerPawn::m_aimPunchAngle - a QAngle (pitch, yaw, roll) in DEGREES,
+// the accumulated aim punch the view is currently offset by. This is the real
+// recoil state, not a table and not a recorded spray pattern.
+//
+// Its relationship to the rendered view is deliberately NOT assumed here: the
+// scale is a config value defaulting to 1.0 and the panel prints the live
+// numbers, so the semantics can be confirmed against the game instead of
+// inheriting the CS:GO weapon_recoil_scale of 2.
+inline ptrdiff_t m_aimPunchAngle                = 0x1510;
+
+// C_CSPlayerPawn -> EntitySpottedState_t. The mask says which players currently
+// see this entity; sdk/visibility.cpp reads the local player's bit out of it.
+inline ptrdiff_t m_entitySpottedState          = 0x1810;
+inline ptrdiff_t m_bSpottedByMask              = 0x0C;   // EntitySpottedState_t
 
 // C_BaseEntity  (FL_ONGROUND lives in bit 0)
 inline ptrdiff_t m_fFlags                      = 0x3F4;
@@ -87,6 +117,45 @@ inline ptrdiff_t m_iItemDefinitionIndex        = 0x1BA;
 // C_CSWeaponBase - live spread state used by the hitchance estimate.
 inline ptrdiff_t m_fAccuracyPenalty            = 0x17F0;
 inline ptrdiff_t m_bInReload                   = 0x1814;
+
+// C_BasePlayerWeapon. The next attack is stored as a TICK, not a time, so the
+// readiness test compares it against the global vars tick counter.
+inline ptrdiff_t m_iClip1                      = 0x3234;
+inline ptrdiff_t m_nNextPrimaryAttackTick      = 0x3248;
+
+// C_CSPlayerPawnBase - flash overlay state (anti-flash writes these)
+inline ptrdiff_t m_flFlashOverlayAlpha         = 0x141C;
+inline ptrdiff_t m_flFlashMaxAlpha             = 0x1424;
+inline ptrdiff_t m_flFlashDuration             = 0x1428;
+
+// C_BaseEntity -> CEntityIdentity, used to read an entity's class name so
+// non-player entities (smoke projectiles) can be identified without a schema
+// binding of their own.
+inline ptrdiff_t m_pEntity                     = 0x10;
+inline ptrdiff_t m_designerName                = 0x20;
+
+// C_SmokeGrenadeProjectile - the tick the smoke volume starts rendering at.
+// Anti-smoke rewrites it; it is a render input, not grenade logic.
+inline ptrdiff_t m_nSmokeEffectTickBegin       = 0x1278;
+
+// C_PlantedC4. m_flC4Blow and m_flDefuseCountDown are absolute GAME times, not
+// durations: the countdown is that value minus the current game time. Every
+// one of these is resolved from the live schema - the numbers below are only
+// the fallback if a lookup fails.
+inline ptrdiff_t m_flC4Blow                    = 0x1D20;
+inline ptrdiff_t m_bBombTicking                = 0x1D24;
+inline ptrdiff_t m_bBombDefused                = 0x1D25;
+inline ptrdiff_t m_nBombSite                   = 0x1D28;
+inline ptrdiff_t m_bBeingDefused               = 0x1D2C;
+inline ptrdiff_t m_flDefuseCountDown           = 0x1D30;
+inline ptrdiff_t m_flTimerLength               = 0x1D34;
+inline ptrdiff_t m_flDefuseLength              = 0x1D38;
+inline ptrdiff_t m_hBombDefuser                = 0x1D3C;
+
+// C_BaseEntity. A dropped C4 has no owner; one in a backpack does, which is
+// how the two are told apart without guessing from position.
+inline ptrdiff_t m_hOwnerEntity                = 0x540;
+inline ptrdiff_t m_bDidSmokeEffect             = 0x127C;
 
 // C_BaseModelEntity
 inline ptrdiff_t m_Glow                        = 0xDE0;

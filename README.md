@@ -40,9 +40,11 @@ build.bat
 Output: `build/cs2_overlay.dll` (x64).
 
 Dependencies are **vendored** in `deps/`, not cloned. Do not run `git clone`
-over them: `deps/imgui` is a fork - the menu port changes ImGui's own widget
-bodies - and re-cloning would throw the port away. The exact upstream commits
-both trees were forked from are recorded in [`deps/UPSTREAM.md`](deps/UPSTREAM.md).
+over them: `deps/imgui_nl` is the customized ImGui 1.87 tree supplied with the
+Neverlose source and is the active UI dependency. Re-cloning/replacing it would
+throw away the literal widget implementations. The dependency mapping and the
+small compatibility/branding differences are recorded in
+[`deps/UPSTREAM.md`](deps/UPSTREAM.md).
 
 A `CMakeLists.txt` is also included for anyone who has CMake and prefers it
 (`cmake -B build -A x64 && cmake --build build --config Release`).
@@ -235,3 +237,8 @@ system like the rest of the project.
   their own toggles and colour in **Visual**.
 - Box height assumes a 72-unit standing hitbox; crouching players get a slightly tall box.
 - `Team check` hides teammates. Turn it off in deathmatch/bot ranges to see everyone.
+
+
+## Font fallback
+
+When the original Neverlose Museo Sans/icon font assets are unavailable, the UI now uses Windows system fonts without bundling font files: Segoe UI Regular for normal text, Segoe UI Semibold for panel headings, and Segoe UI Bold for the large logo/title slot. Arial is only a last-resort fallback.

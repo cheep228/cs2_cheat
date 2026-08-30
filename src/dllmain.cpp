@@ -3,6 +3,8 @@
 #include "core/globals.h"
 #include "core/hooks.h"
 #include "core/log.h"
+#include "core/game_hooks.h"
+#include "features/world.h"
 #include "core/settings.h"
 #include "sdk/gameinfo.h"
 #include "sdk/resolve.h"
@@ -68,14 +70,14 @@ DWORD WINAPI MainThread(LPVOID) {
     if (!hooks::Init())
         Die("hook installation failed - see the messages above");
 
-    cfg::c.bots.color = ImVec4(1.f, 0.85f, 0.30f, 1.f);
-
     DBG_OK("core", "ready - INSERT toggles the menu, END unloads");
 
     while (!cfg::c.unloadQueued && !g::unload)
         Sleep(50);
 
     DBG_W("core", "unload requested");
+    world::Restore();
+    gamehooks::Remove();
     hooks::Shutdown();
     Sleep(100);
 

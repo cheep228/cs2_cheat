@@ -28,7 +28,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
-    const int seconds = 8;
+    const int seconds = 15;
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -39,12 +39,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"overlay test host",
                                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                                80, 80, 900, 560, nullptr, nullptr, inst, nullptr);
+                                80, 80, 1120, 820, nullptr, nullptr, inst, nullptr);
 
     DXGI_SWAP_CHAIN_DESC sd{};
     sd.BufferCount = 2;
-    sd.BufferDesc.Width = 900;
-    sd.BufferDesc.Height = 560;
+    sd.BufferDesc.Width = 1100;
+    sd.BufferDesc.Height = 760;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hwnd;

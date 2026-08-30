@@ -12,9 +12,6 @@ struct SubTabs {
     int                count = 0;
 };
 
-SubTabs RageSubs();
-void    RageDraw(int sub);
-
 SubTabs LegitSubs();
 void    LegitDraw(int sub);
 

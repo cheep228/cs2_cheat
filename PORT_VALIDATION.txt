@@ -1,0 +1,24 @@
+Neverlose UI port validation
+============================
+
+Completed in this environment:
+- Compiled the exact customized ImGui 1.87 core translation units:
+  imgui.cpp, imgui_draw.cpp, imgui_tables.cpp, imgui_widgets.cpp.
+- Compiled src/ui/menu.cpp and src/ui/theme.cpp against that 1.87 fork using
+  minimal Win32 declarations for syntax/API validation.
+- Compiled every src/ui/tab_*.cpp translation unit against the 1.87 fork.
+- Ran a 90-frame headless ImGui draw-list smoke test using MainBegin, TabButton,
+  MenuChild, Checkbox, Combo and Slider from the supplied fork.
+- Generated docs/neverlose_ui_port_preview_fallback_font.png from those actual
+  ImGui draw lists.
+
+Not possible in the Linux build environment used for the port:
+- Produce or execute the final Windows D3D11 cs2_overlay.dll with MSVC.
+
+On Windows, run:
+    build.bat
+then optionally:
+    build_test.bat
+    build\test\host.exe
+
+The test host is now large enough to show the complete 800x620 menu.

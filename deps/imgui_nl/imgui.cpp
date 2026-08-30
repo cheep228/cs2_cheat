@@ -5816,9 +5816,9 @@ void ImGui::RenderMainWindowDecorations( ImGuiWindow* window, const ImRect& titl
     window->DrawList->AddCircleFilled(window->Pos + ImVec2(29 * g.IO.GUIScale, 595 * g.IO.GUIScale), 17.f * g.IO.GUIScale, ImColor(255, 255, 255), 360);
     window->DrawList->AddText(window->Pos + ImVec2(55 * g.IO.GUIScale, 578 * g.IO.GUIScale), ImColor(Colors::TextActive), Colors::username.c_str());
     window->DrawList->AddText(window->Pos + ImVec2(55 * g.IO.GUIScale, 595 * g.IO.GUIScale), ImColor(Colors::AccentDisabled), "Till:");
-    window->DrawList->AddText(window->Pos + ImVec2(80 * g.IO.GUIScale, 595 * g.IO.GUIScale), ImColor(Colors::Accent), "31.12 23:59");
+    window->DrawList->AddText(window->Pos + ImVec2(80 * g.IO.GUIScale, 595 * g.IO.GUIScale), ImColor(Colors::Accent), " lifetime");
 
-    auto Logo = "NEVERLOSE";
+    auto Logo = "4FIR";
     ImGui::PushFont( g.IO.Fonts->Fonts[ 1 ] );
     if (Colors::theme != 2)
         window->DrawList->AddText(window->Pos + ImVec2(w / 2.f - CalcTextSize(Logo).x / 2.f - 1, 14), ImColor(Colors::Accent), Logo);

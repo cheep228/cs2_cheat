@@ -13,6 +13,7 @@
 #include "sdk/math.h"
 #include "sdk/offsets.h"
 #include "sdk/resolve.h"
+#include "sdk/weapon.h"
 
 namespace {
 
@@ -38,6 +39,65 @@ void DrawOutlinedText(ImDrawList* d, ImVec2 pos, ImU32 color, const char* text) 
 void DrawCenteredText(ImDrawList* d, float cx, float y, ImU32 color, const char* text) {
     const ImVec2 size = ImGui::CalcTextSize(text);
     DrawOutlinedText(d, ImVec2(cx - size.x * 0.5f, y), color, text);
+}
+
+// Active weapon of any pawn, by the same path weapon::Local() walks for the
+// local player: weapon services -> active weapon handle -> econ item view ->
+// definition index. Null when the pawn holds nothing we have ballistics for.
+const char* WeaponNameOf(uintptr_t pawn, uintptr_t entityList, bool* reloading) {
+    if (reloading)
+        *reloading = false;
+
+    const uintptr_t services = mem::Read<uintptr_t>(pawn + schema::m_pWeaponServices);
+    if (!mem::Valid(services))
+        return nullptr;
+
+    const uint32_t handle = mem::Read<uint32_t>(services + schema::m_hActiveWeapon);
+    const uintptr_t wep = sdk::GetEntityByHandle(entityList, handle);
+    if (!mem::Valid(wep))
+        return nullptr;
+
+    const uintptr_t item = wep + schema::m_AttributeManager + schema::m_Item;
+    const int defIndex = mem::Read<uint16_t>(item + schema::m_iItemDefinitionIndex);
+    if (defIndex <= 0)
+        return nullptr;
+
+    if (reloading)
+        *reloading = mem::Read<bool>(wep + schema::m_bInReload);
+
+    const weapon::Info& info = weapon::ById(defIndex);
+    if (info.kind == weapon::Kind::Unknown)
+        return nullptr;
+    return info.name;
+}
+
+// Short state tags, every one of them a live read rather than a guess.
+// Returns how many were written into `out`.
+int BuildFlags(uintptr_t pawn, bool reloading, const char** out, int max) {
+    int n = 0;
+    auto push = [&](const char* tag) {
+        if (n < max)
+            out[n++] = tag;
+    };
+
+    const uint32_t flags = mem::Read<uint32_t>(pawn + schema::m_fFlags);
+    if (!(flags & 1u))
+        push("AIR");
+
+    if (mem::Read<bool>(pawn + schema::m_bIsScoped))
+        push("SCOPED");
+
+    if (mem::Read<float>(pawn + schema::m_flFlashOverlayAlpha) > 10.f)
+        push("FLASH");
+
+    if (reloading)
+        push("RELOAD");
+
+    const weapon::Armor armor = weapon::ArmorOf(pawn);
+    if (armor.value > 0)
+        push(armor.helmet ? "HK" : "K");
+
+    return n;
 }
 
 void DrawBox(ImDrawList* d, const Box& b, ImU32 color, int type) {
@@ -196,6 +256,7 @@ void Render(ImDrawList* draw) {
     if (!bones::layout.calibrated)
         bones::Calibrate(localPawn, localOrigin);
 
+
     const uint32_t nowMs = GetTickCount();
     chams::lastApplied = 0;
     const Matrix4x4 viewMatrix = mem::Read<Matrix4x4>(g::client + offsets::dwViewMatrix);
@@ -213,7 +274,11 @@ void Render(ImDrawList* draw) {
         ++stats.slotsScanned;
         if (p.isBot) ++stats.bots; else ++stats.humans;
 
-        const cfg::EspGroup& grp = p.isBot ? cfg::c.bots : cfg::c.players;
+
+
+        // Bots are players. Same struct, same settings, same code path - the
+        // isBot flag only feeds the diagnostics counters above.
+        const cfg::EspGroup& grp = cfg::c.players;
         if (!grp.enabled)
             continue;
         if (cfg::c.teamCheck && p.team == localTeam)
@@ -274,12 +339,35 @@ void Render(ImDrawList* draw) {
         if (grp.name)
             DrawCenteredText(draw, head.x, box.y - 15.f, color, p.name.c_str());
 
+        bool reloading = false;
+        const char* gunName =
+            (grp.weapon || grp.flags) ? WeaponNameOf(p.pawn, entityList, &reloading)
+                                      : nullptr;
+
         float below = box.y + box.h + 2.f;
         if (grp.distance) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%.0fm", meters);
             DrawCenteredText(draw, head.x, below, IM_COL32(220, 220, 220, 255), buf);
             below += 14.f;
+        }
+
+        if (grp.weapon && gunName) {
+            DrawCenteredText(draw, head.x, below, IM_COL32(220, 220, 220, 255), gunName);
+            below += 14.f;
+        }
+
+        // Flags run down the right edge so they never collide with the name
+        // above the box or the distance below it.
+        if (grp.flags) {
+            const char* tags[6];
+            const int count = BuildFlags(p.pawn, reloading, tags, 6);
+            const ImU32 flagCol = ToU32(grp.flagsColor);
+            float fy = box.y;
+            for (int t = 0; t < count; ++t) {
+                DrawOutlinedText(draw, ImVec2(box.x + box.w + 5.f, fy), flagCol, tags[t]);
+                fy += 12.f;
+            }
         }
     }
 

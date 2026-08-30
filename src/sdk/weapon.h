@@ -46,6 +46,11 @@ struct Active {
     float     accuracyPenalty = 0.f;   // live, grows while firing
     bool      reloading = false;
     bool      scoped    = false;
+
+    // Readiness, for the trigger bot. nextAttackTick is a game tick, so it is
+    // compared against the global vars tick counter rather than a wall clock.
+    int       clip           = -1;   // -1 when the field did not read
+    int       nextAttackTick = 0;
 };
 
 Active Local(uintptr_t localPawn);

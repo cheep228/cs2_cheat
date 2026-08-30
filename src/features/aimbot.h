@@ -3,6 +3,7 @@
 
 #include "imgui.h"
 #include "sdk/math.h"
+#include "sdk/usercmd.h"
 
 namespace aimbot {
 
@@ -14,6 +15,20 @@ struct State {
     float   targetFov   = 0.f;     // angular distance to the chosen point
     Vector2 targetScreen{};
     int     candidates  = 0;       // players considered this frame
+
+    // Aim points thrown out by the visibility gate this frame. Stays 0 when
+    // the gate is off or when the spotted mask is unavailable.
+    int     rejectedOccluded = 0;
+
+    // The angle the aimbot settled on this frame, in world terms. CreateMove
+    // reads this: with silent aim on it goes into the command's input history
+    // and the camera is left alone, so the two angles stay separate.
+    Angle   desiredAngle{};
+    bool    silentPending = false;   // desiredAngle is waiting to be applied
+
+    // Where the chosen aim point actually is, for the panel and the marker.
+    Vector3 targetWorld{};
+    int     headBone = -1;           // bone index the head resolved to
 };
 
 extern State state;
@@ -24,6 +39,11 @@ void Run();
 
 // Draws the FOV circle and the target marker.
 void Draw(ImDrawList* d, int screenW, int screenH);
+
+// Applies the pending aim to the command being built. Called from CreateMove;
+// this is the only place silent aim can happen, because the shot angle lives
+// in the command and nowhere else.
+void ApplyToCommand(usercmd::UserCmd* cmd);
 
 // Bone id behind a cfg::AimPart, or -1.
 int BoneForPart(int part);

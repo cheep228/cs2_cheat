@@ -11,7 +11,7 @@ namespace configio {
 namespace {
 
 constexpr uint32_t kMagic   = 0x34464752;   // "RGF4"
-constexpr uint32_t kVersion = 3;
+constexpr uint32_t kVersion = 4;
 
 struct Header {
     uint32_t magic;
@@ -162,7 +162,6 @@ void ResetToDefaults() {
     const int menuKey = cfg::c.menuKey;
     cfg::c = cfg::Config{};
     cfg::c.menuKey = menuKey;
-    cfg::c.bots.color = ImVec4(1.f, 0.85f, 0.30f, 1.f);
 }
 
 } // namespace configio

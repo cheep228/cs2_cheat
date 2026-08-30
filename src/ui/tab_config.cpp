@@ -2,6 +2,7 @@
 
 #include "core/config_io.h"
 #include "core/globals.h"
+#include "core/safe_settings.h"
 #include "ui/theme.h"
 #include "ui/tabs.h"
 
@@ -55,7 +56,34 @@ void DrawConfigs() {
     }
     theme::EndGroupBox();
 
-    ImGui::SameLine();
+    ImGui::SameLine(0.f, 16.f * ImGui::GetIO().GUIScale);
+
+    theme::BeginGroupBox("Safe settings", ImVec2(w, 0.f));
+    cfg::SafeSettings& safe = cfg::c.safe;
+    theme::Checkbox("Safe settings", &safe.enabled);
+    theme::TextDim("A limiter over the LEGIT tab, not a slot.");
+    theme::Separator();
+    if (safe.enabled) {
+        theme::TextColored(theme::col::kAccent, "Field of view  <= %.1f deg",
+                           cfg::SafeSettings::kMaxFov);
+        theme::TextColored(theme::col::kAccent, "Smoothing      >= %.1f",
+                           cfg::SafeSettings::kMinSmooth);
+        theme::TextColored(theme::col::kAccent, "Visibility check locked on");
+        theme::Separator();
+        if (safe.saved)
+            theme::TextDim("Your values (fov %.1f, smooth %.1f, vis %s)",
+                           safe.prevFov, safe.prevSmooth,
+                           safe.prevVisibilityCheck ? "on" : "off");
+        theme::TextDim("come back when this is switched off.");
+    } else {
+        theme::TextDim("Off: the legit settings are unrestricted.");
+        theme::TextDim("Turning it on stashes your values first.");
+    }
+    theme::Separator();
+    theme::TextDim("The legit aimbot has one settings block,");
+    theme::TextDim("not per-weapon groups, so these limits");
+    theme::TextDim("already cover every weapon.");
+    theme::EndGroupBox();
 
     theme::BeginGroupBox("Status", ImVec2(w, 0.f));
     theme::TextColored(g_statusIsError ? theme::col::kBad : theme::col::kGood, "%s",

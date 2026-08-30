@@ -25,7 +25,7 @@ const Definition kDefs[cfg::HitboxCount] = {
     /* Head    */ { { bones::Head,      -1 },              3.9f, true,  false },
     /* Neck    */ { { bones::Neck,      -1 },              3.0f, false, false },
     /* Chest   */ { { bones::Chest,     -1 },              9.0f, false, false },
-    /* Stomach */ { { bones::Spine1,    -1 },              8.0f, false, false },
+    /* Stomach */ { { bones::Spine2,    -1 },              8.0f, false, false },
     /* Pelvis  */ { { bones::Pelvis,    -1 },              7.0f, false, false },
     /* Arms    */ { { bones::ArmUpperL, bones::ArmUpperR }, 4.0f, false, true  },
     /* Legs    */ { { bones::LegUpperL, bones::LegUpperR }, 5.0f, false, true  },

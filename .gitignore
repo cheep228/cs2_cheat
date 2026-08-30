@@ -10,14 +10,21 @@ out/
 *.exe
 *.log
 
-# deps/imgui and deps/minhook are VENDORED, not cloned - see deps/UPSTREAM.md.
-# ImGui is a fork of ours (the neverlose UI port modifies imgui.cpp /
-# imgui_widgets.cpp / imgui.h in place), so re-cloning it would silently throw
-# the port away. Both are tracked on purpose.
+# deps/imgui_nl, deps/imgui and deps/minhook are VENDORED, not cloned - see
+# deps/UPSTREAM.md. deps/imgui_nl is the active customized Neverlose ImGui fork;
+# replacing it would silently throw the literal UI port away. They are tracked
+# on purpose.
 #
 # cs2-dumper is different: a reference checkout of a third-party Rust tool that
 # nothing here builds or links, kept locally only to read its offset patterns.
 deps/cs2-dumper/
+
+# Working scratch, not part of the project: the source archives the UI was
+# ported from and a duplicate copy of the tree kept during that port. 58 MB
+# that no checkout needs.
+*.zip
+Myproject_neverlose_ui_port/
+HANDOFF.md
 
 # Editors and CMake scratch
 .vs/

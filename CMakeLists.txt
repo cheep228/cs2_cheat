@@ -17,19 +17,17 @@ add_library(minhook STATIC
     deps/minhook/src/hde/hde64.c)
 target_include_directories(minhook PUBLIC deps/minhook/include)
 
-# ---- Dear ImGui (vendored FORK, deps/imgui) --------------------------
-# Deliberately NOT FetchContent: the neverlose UI port edits ImGui's own
-# widget bodies, so a fetched pristine copy would drop every change.
+# ---- Dear ImGui (exact supplied Neverlose fork, 1.87 WIP) -------------
+# This directory is byte-for-byte the customized ImGui core from the provided
+# Neverlose source (apart from tiny compiler/branding compatibility edits).
 add_library(imgui STATIC
-    deps/imgui/imgui.cpp
-    deps/imgui/imgui_draw.cpp
-    deps/imgui/imgui_tables.cpp
-    deps/imgui/imgui_widgets.cpp
-    deps/imgui/backends/imgui_impl_win32.cpp
-    deps/imgui/backends/imgui_impl_dx11.cpp)
-target_include_directories(imgui PUBLIC
-    deps/imgui
-    deps/imgui/backends)
+    deps/imgui_nl/imgui.cpp
+    deps/imgui_nl/imgui_draw.cpp
+    deps/imgui_nl/imgui_tables.cpp
+    deps/imgui_nl/imgui_widgets.cpp
+    deps/imgui_nl/imgui_impl_win32.cpp
+    deps/imgui_nl/imgui_impl_dx11.cpp)
+target_include_directories(imgui PUBLIC deps/imgui_nl)
 target_link_libraries(imgui PUBLIC d3d11 dxgi d3dcompiler)
 
 # ---- payload -----------------------------------------------------------
@@ -38,10 +36,16 @@ add_library(cs2_overlay SHARED
     src/core/hooks.cpp
     src/core/log.cpp
     src/core/settings.cpp
+    src/core/safe_settings.cpp
+    src/core/vmt.cpp
+    src/core/game_hooks.cpp
     src/sdk/entity.cpp
     src/sdk/gameinfo.cpp
     src/sdk/schema.cpp
     src/sdk/sigscan.cpp
+    src/sdk/modules.cpp
+    src/sdk/interfaces.cpp
+    src/sdk/usercmd.cpp
     src/sdk/resolve.cpp
     src/sdk/entitylist.cpp
     src/sdk/bones.cpp
@@ -51,6 +55,10 @@ add_library(cs2_overlay SHARED
     src/features/chams.cpp
     src/features/aimbot.cpp
     src/features/autowall.cpp
+    src/features/world.cpp
+    src/features/movement.cpp
+    src/features/triggerbot.cpp
+    src/features/recoil.cpp
     src/features/ragebot.cpp
     src/features/rage/weapon_settings.cpp
     src/features/rage/hitbox_scanner.cpp
@@ -61,9 +69,10 @@ add_library(cs2_overlay SHARED
     src/features/rage/fire.cpp
     src/core/config_io.cpp
     src/sdk/trace.cpp
+    src/sdk/visibility.cpp
     src/ui/theme.cpp
+    src/ui/nl_blur.cpp
     src/ui/menu.cpp
-    src/ui/tab_rage.cpp
     src/ui/tab_legit.cpp
     src/ui/tab_visuals.cpp
     src/ui/tab_misc.cpp

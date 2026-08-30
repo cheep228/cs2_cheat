@@ -25,29 +25,29 @@ Ring g_history[kSlots];
 // Bone chain: {parent, child} pairs forming the visible skeleton.
 struct Link { int a, b; };
 
+// Built each frame from the resolved roles: the indices are no longer compile
+// time constants, they are identified geometrically at runtime (sdk/bones.h).
 constexpr Link kLinks[] = {
-    // spine, one segment per real bone so the back curves like the model
+    // spine. The model numbers these oddly - spine_1 is 4, spine_2 is 2 - so
+    // the chain is written by role, not by ascending index.
     { bones::Pelvis,    bones::Spine0 },
-    { bones::Spine0,    bones::Spine1 },
-    { bones::Spine1,    bones::Spine2 },
-    { bones::Spine2,    bones::Chest },
+    { bones::Spine0,    bones::Spine2 },
+    { bones::Spine2,    bones::Spine3 },
+    { bones::Spine3,    bones::Chest },
     { bones::Chest,     bones::Neck },
     { bones::Neck,      bones::Head },
-    // left arm
-    { bones::Neck,      bones::ClavicleL },
-    { bones::ClavicleL, bones::ArmUpperL },
+    // arms. There is no clavicle bone in this table; the upper arm hangs
+    // straight off the neck.
+    { bones::Neck,      bones::ArmUpperL },
     { bones::ArmUpperL, bones::ArmLowerL },
     { bones::ArmLowerL, bones::HandL },
-    // right arm
-    { bones::Neck,      bones::ClavicleR },
-    { bones::ClavicleR, bones::ArmUpperR },
+    { bones::Neck,      bones::ArmUpperR },
     { bones::ArmUpperR, bones::ArmLowerR },
     { bones::ArmLowerR, bones::HandR },
-    // left leg
+    // legs
     { bones::Pelvis,    bones::LegUpperL },
     { bones::LegUpperL, bones::LegLowerL },
     { bones::LegLowerL, bones::AnkleL },
-    // right leg
     { bones::Pelvis,    bones::LegUpperR },
     { bones::LegUpperR, bones::LegLowerR },
     { bones::LegLowerR, bones::AnkleR },

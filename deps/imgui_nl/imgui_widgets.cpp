@@ -822,7 +822,7 @@ bool ImGui::TabButton(const char* icon, const char* label, bool active) {
         TabMap.insert({ id, TabAnimation() });
         TabItemMap = TabMap.find(id);
     }
-    auto TabItem = TabItemMap->second.TabFrame = ImLerp(TabItemMap->second.TabFrame.Value, active ? Colors::TabFrame : ImColor(Colors::TabFrame.x, Colors::TabFrame.y, Colors::TabFrame.z, 0.f), g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
+    auto TabItem = TabItemMap->second.TabFrame = ImLerp(TabItemMap->second.TabFrame.Value, active ? ImColor(Colors::TabFrame) : ImColor(Colors::TabFrame.x, Colors::TabFrame.y, Colors::TabFrame.z, 0.f), g.IO.DeltaTime * 8.f * g.IO.AnimationSpeed);
 
 
     // Render

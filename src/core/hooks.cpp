@@ -14,7 +14,9 @@
 #include "core/log.h"
 #include "features/aimbot.h"
 #include "features/esp.h"
-#include "features/ragebot.h"
+#include "core/game_hooks.h"
+#include "core/safe_settings.h"
+#include "features/world.h"
 #include "ui/menu.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -208,6 +210,18 @@ HRESULT WINAPI hkPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flag
 
         PollHotkeys();
 
+        // The game hooks need CCSGOInput, which only exists once the client
+        // has spun up. Retried from here about once a second until it takes,
+        // then this is a single bool test per frame.
+        if (!gamehooks::state.installed) {
+            static uint32_t lastTry = 0;
+            const uint32_t now = GetTickCount();
+            if (now - lastTry > 1000) {
+                lastTry = now;
+                gamehooks::Install();
+            }
+        }
+
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
@@ -215,15 +229,18 @@ HRESULT WINAPI hkPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flag
         ImGui::GetIO().MouseDrawCursor = g::menuOpen;
 
         // Aim runs before the frame is drawn so the markers match what it did.
-        // Ragebot goes last so it wins the view angles when both are held.
+        // The ragebot has no UI and is not driven from here any more.
+        // The guard rail runs first so the aimbot never reads a value it is
+        // about to have taken away.
+        safeset::Sync();
         aimbot::Run();
-        ragebot::Run();
 
         if (cfg::c.masterSwitch) {
             ImDrawList* bg = ImGui::GetBackgroundDrawList();
+            world::Run();
             esp::Render(bg);
+            world::Draw(bg);
             aimbot::Draw(bg, g::screenW, g::screenH);
-            ragebot::Draw(bg, g::screenW, g::screenH);
         }
 
         menu::Render();

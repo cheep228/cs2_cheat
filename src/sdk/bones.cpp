@@ -1,4 +1,5 @@
 #include <Windows.h>
+
 #include <cmath>
 
 #include "core/log.h"
@@ -56,17 +57,31 @@ bool Calibrate(uintptr_t pawn, const Vector3& originHint) {
 
         const Vector3 pelvis = ReadBone(array, Pelvis, 0x20);
         const Vector3 head   = ReadBone(array, Head, 0x20);
+        const Vector3 ankleL = ReadBone(array, AnkleL, 0x20);
+        const Vector3 ankleR = ReadBone(array, AnkleR, 0x20);
 
         if (!Plausible(pelvis, originHint) || !Plausible(head, originHint))
             continue;
 
-        // The head must actually be above the pelvis, by about the height of a
-        // torso. This is what separates the real array from a lookalike.
+        // The head must stand a torso above the pelvis. This is what separates
+        // the real array from a lookalike.
         const float rise = head.z - pelvis.z;
-        if (rise < 25.f || rise > 90.f) {
+        if (rise < 20.f || rise > 60.f) {
             DBG_T("bones", "offset 0x%llX: head-pelvis rise %.1f is wrong - rejected",
                   static_cast<unsigned long long>(candidate), rise);
             continue;
+        }
+
+        // And the ankles must be BELOW the pelvis, on the ground. This is the
+        // check that would have caught the old wrong leg indices immediately:
+        // bones 19 and 22 sat at hip height, not at the feet.
+        if (Plausible(ankleL, originHint) && Plausible(ankleR, originHint)) {
+            const float drop = pelvis.z - (ankleL.z + ankleR.z) * 0.5f;
+            if (drop < 10.f) {
+                DBG_T("bones", "offset 0x%llX: ankles only %.1f below pelvis - rejected",
+                      static_cast<unsigned long long>(candidate), drop);
+                continue;
+            }
         }
 
         layout.boneArray = candidate;
@@ -76,7 +91,8 @@ bool Calibrate(uintptr_t pawn, const Vector3& originHint) {
         DBG_OK("bones", "bone array at modelState+0x%llX, stride 0x%llX",
                static_cast<unsigned long long>(candidate),
                static_cast<unsigned long long>(layout.stride));
-        DBG_OK("bones", "pelvis z=%.1f head z=%.1f (rise %.1f)", pelvis.z, head.z, rise);
+        DBG_OK("bones", "pelvis z=%.1f head z=%.1f (rise %.1f), ankles z=%.1f/%.1f",
+               pelvis.z, head.z, rise, ankleL.z, ankleR.z);
         return true;
     }
 
@@ -90,6 +106,19 @@ Vector3 Position(uintptr_t pawn, int boneId) {
         return {};
     const uintptr_t array = BoneArray(pawn, layout.boneArray);
     return ReadBone(array, boneId, layout.stride);
+}
+
+Vector3 AimPoint(uintptr_t pawn, int boneId) {
+    Vector3 p = Position(pawn, boneId);
+    if (p.IsZero())
+        return p;
+
+    // Only the head needs correcting: its bone is the joint at the base of the
+    // skull, so the raw position lands on the neck.
+    if (boneId == Head)
+        p.z += kHeadCentre;
+
+    return p;
 }
 
 void DumpAll(uintptr_t pawn, int count) {

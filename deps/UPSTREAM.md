@@ -1,56 +1,63 @@
 # Vendored dependencies
 
-Both trees under `deps/` are **vendored**, not fetched. Do not clone over them
-and do not re-add `FetchContent` to `CMakeLists.txt`: `deps/imgui` is a fork,
-and any mechanism that repopulates it silently deletes the port.
+The active menu build is intentionally pinned to the customized ImGui tree that
+came with the supplied Neverlose source. Do not replace it with FetchContent or
+a clean upstream checkout: the UI modifications live inside ImGui itself.
 
-## deps/imgui — FORK
+## deps/imgui_nl — ACTIVE Neverlose ImGui fork
 
-| | |
-| --- | --- |
-| Upstream | https://github.com/ocornut/imgui |
-| Branch | `docking` |
-| Commit | `fd13a1e8923a0a7077b404fc36fd063b25a0c0b5` |
-| Commit date | 2026-08-19 13:39:46 +0200 |
-| Subject | `Merge branch 'master' into docking` |
-| Version | `1.93.0 WIP` (`IMGUI_VERSION_NUM` 19294) |
-| Contents | complete upstream tree at that commit, minus `.git` |
+- Version string: `1.87 WIP` (`IMGUI_VERSION_NUM` 18604)
+- Origin: `ImGui/` directory from the user-supplied `neverlose_v4.zip`
+- Build path: used by both `CMakeLists.txt` and `build.bat`
+- Backends: the matching Win32 + D3D11 backends in the same directory
 
-To reproduce the base this fork started from:
+The following original custom implementations are therefore built directly,
+not recreated by `theme.cpp` wrappers:
 
-```bash
-git clone https://github.com/ocornut/imgui.git
-cd imgui && git checkout fd13a1e8923a0a7077b404fc36fd063b25a0c0b5
-```
+- `ImGui::MainBegin` / `RenderMainWindowDecorations`
+- `ImGui::MenuChild` / `MenuChildEx`
+- `ImGui::TabButton`
+- `ImGui::Checkbox`
+- `ImGui::SliderScalar`
+- `ImGui::BeginCombo`
+- `ImGui::Selectable`
+- `ImGui::ButtonEx` and the icon+label `Button` overload
+- `ImGui::RadioButton`
+- `ImGui::ScrollbarEx`
+- the custom `ImGuiIO::GUIScale` and `AnimationSpeed` fields
+- the global `Colors::*` palette used by those widgets
 
-Diffing that checkout against `deps/imgui` gives exactly the port and nothing
-else.
+Local differences from the supplied tree are deliberately tiny:
 
-### Why it is a fork
+1. `TabButton` wraps `Colors::TabFrame` in `ImColor(...)` in one ternary to
+   avoid an ambiguous conversion on non-MSVC compilers. The resulting color is
+   identical.
+2. Window logo text is branded `4FIR` instead of `NEVERLOSE`.
+3. Subscription text is branded `lifetime` instead of the hard-coded old date.
+4. The original DX9 blur implementation is replaced at the call boundary by a
+   D3D11 compatibility shim (`src/ui/nl_blur.cpp`). The supplied DX9 shader
+   binaries cannot be used by a D3D11 context.
 
-The menu is a port of the neverlose CS:GO UI, and that UI is not a widget
-library layered on top of ImGui - it *is* ImGui, modified in place. Its
-`Checkbox`, `SliderScalar`, `BeginCombo`, `Button`, `Selectable`, `RadioButton`
-and `ScrollbarEx` are rewritten bodies of the stock functions, and the window
-shape lives inside `RenderWindowDecorations`. Reusing those implementations
-means replacing the stock ones, which is only possible in a tree we own.
+## deps/imgui — INACTIVE reference/previous attempt
 
-Every line changed for the port is marked in place. Changes made purely to
-reconcile the original 1.87 code with 1.93 carry:
+This is the previously vendored ImGui 1.93 tree. It is intentionally left in
+place so prior work/history is not destroyed, but it is no longer compiled by
+the payload. The exact 1.87 customized fork above avoids reimplementing the
+Neverlose widget bodies across the 1.87 -> 1.93 API gap.
 
-```
-// NL PORT: ImGui 1.93 compatibility
-```
+## Fonts
 
-so a later upstream merge can tell a port decision from a compatibility fix.
+The supplied source references these files but did not contain any TTF/OTF
+assets:
+
+- `museosanscyrl-500.ttf` — 16 px and 11 px
+- `museosanscyrl-700.ttf` — 16 px
+- `museosanscyrl-900.ttf` — 30 px
+- `neverlose-v2-icons.ttf` — 18 px and 12 px
+
+See `assets/fonts/README.txt`. The loader preserves the exact six font slots and
+sizes, and uses Windows font fallbacks when those assets are absent.
 
 ## deps/minhook
 
-| | |
-| --- | --- |
-| Upstream | https://github.com/TsudaKageyu/minhook |
-| Branch | `master` |
-| Commit | `d94c64d32ea37bc4f5ee47d580709f70c6fb6080` |
-| Commit date | 2026-06-13 23:02:43 +0300 |
-| Subject | `Fix link to MinHook article in README` |
-| Modified | no - pristine upstream, vendored only so the build never reaches the network |
+Vendored MinHook remains unchanged by the UI port and is built locally.

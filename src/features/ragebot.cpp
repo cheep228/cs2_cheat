@@ -121,7 +121,7 @@ Solution ScanTarget(const Target& target, const ScanContext& ctx,
     for (int b = 0; b < ctx.boxCount; ++b) {
         const rage::hitboxes::Entry& box = ctx.boxes[b];
 
-        const Vector3 centre = bones::Position(target.pawn, box.bone);
+        const Vector3 centre = bones::AimPoint(target.pawn, box.bone);
         if (centre.IsZero())
             continue;
 

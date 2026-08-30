@@ -36,6 +36,10 @@ const GlobalSig kGlobals[] = {
     // 48 8B 05 rel32   mov rax, [rip+x]
     { "dwLocalPlayerController", &offsets::dwLocalPlayerController,
       "48 8B 05 ? ? ? ? 41 89 BE", 3, 7 },
+
+    // 48 89 0D rel32   mov [rip+x], rcx   - global vars, for the bomb timer
+    { "dwGlobalVars", &offsets::dwGlobalVars,
+      "48 89 0D ? ? ? ? 48 89 41 ? 48 8B 4C 24", 3, 7 },
 };
 
 // These two are reached in two steps: a base global, then a struct member
@@ -87,7 +91,28 @@ const FieldSig kFields[] = {
     { "C_CSPlayerPawn",        "m_ArmorValue",           &schema::m_ArmorValue },
     { "C_CSPlayerPawn",        "m_bIsScoped",            &schema::m_bIsScoped },
     { "C_CSPlayerPawn",        "m_iShotsFired",          &schema::m_iShotsFired },
+    { "C_CSPlayerPawn",        "m_aimPunchAngle",        &schema::m_aimPunchAngle },
+    // m_entitySpottedState is declared on a base class in some dumps and on the
+    // pawn in others. Both are tried; a miss keeps the baked value and only the
+    // successful lookup writes, so the order is a fallback chain.
+    { "C_BaseEntity",          "m_entitySpottedState",   &schema::m_entitySpottedState },
+    { "C_CSPlayerPawnBase",    "m_entitySpottedState",   &schema::m_entitySpottedState },
+    { "C_CSPlayerPawn",        "m_entitySpottedState",   &schema::m_entitySpottedState },
+    { "C_PlantedC4",           "m_flC4Blow",             &schema::m_flC4Blow },
+    { "C_PlantedC4",           "m_bBombTicking",         &schema::m_bBombTicking },
+    { "C_PlantedC4",           "m_bBombDefused",         &schema::m_bBombDefused },
+    { "C_PlantedC4",           "m_nBombSite",            &schema::m_nBombSite },
+    { "C_PlantedC4",           "m_bBeingDefused",        &schema::m_bBeingDefused },
+    { "C_PlantedC4",           "m_flDefuseCountDown",    &schema::m_flDefuseCountDown },
+    { "C_PlantedC4",           "m_flTimerLength",        &schema::m_flTimerLength },
+    { "C_PlantedC4",           "m_flDefuseLength",       &schema::m_flDefuseLength },
+    { "C_PlantedC4",           "m_hBombDefuser",         &schema::m_hBombDefuser },
+    { "C_BaseEntity",          "m_hOwnerEntity",         &schema::m_hOwnerEntity },
+    { "C_BasePlayerWeapon",    "m_iClip1",               &schema::m_iClip1 },
+    { "C_BasePlayerWeapon",    "m_nNextPrimaryAttackTick", &schema::m_nNextPrimaryAttackTick },
+    { "EntitySpottedState_t",  "m_bSpottedByMask",       &schema::m_bSpottedByMask },
     { "C_BaseEntity",          "m_fFlags",               &schema::m_fFlags },
+    { "C_BaseEntity",          "m_MoveType",             &schema::m_MoveType },
     { "C_BasePlayerPawn",      "m_pWeaponServices",      &schema::m_pWeaponServices },
     { "C_BasePlayerPawn",      "m_pItemServices",        &schema::m_pItemServices },
     { "CPlayer_WeaponServices","m_hActiveWeapon",        &schema::m_hActiveWeapon },
