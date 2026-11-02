@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.trafficguard.data.SettingsRepo
+import com.trafficguard.service.RootShell
 import com.trafficguard.service.TrafficService
 
 class MainActivity : ComponentActivity() {
@@ -26,7 +27,17 @@ class MainActivity : ComponentActivity() {
         if (SettingsRepo.settings.value.monitorEnabled) {
             runCatching { TrafficService.start(this) }
         }
+        probeRootOnce()
         setContent { AppTheme { AppRoot() } }
+    }
+
+    /** First launch: if the phone is rooted, block through root by default. */
+    private fun probeRootOnce() {
+        if (SettingsRepo.settings.value.rootProbed) return
+        Thread {
+            val ok = RootShell.available()
+            SettingsRepo.update { it.copy(rootProbed = true, useRoot = it.useRoot || ok) }
+        }.start()
     }
 }
 

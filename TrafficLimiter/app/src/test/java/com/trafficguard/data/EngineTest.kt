@@ -151,6 +151,8 @@ class UsageAndJsonTest {
         val s = Settings(
             limitingEnabled = true,
             monitorEnabled = false,
+            useRoot = true,
+            rootProbed = true,
             profiles = listOf(
                 Profile("a", "Дом", NetType.WIFI, "Home", true, 1, 2, 3, 4, true,
                     mapOf("x" to AppRule(AppMode.BLOCK), "y" to AppRule(AppMode.NORMAL, 99))),

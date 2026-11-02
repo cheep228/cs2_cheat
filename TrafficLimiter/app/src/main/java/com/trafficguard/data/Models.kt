@@ -57,6 +57,8 @@ data class Settings(
     val monitorEnabled: Boolean = true,
     /** Block with iptables through root instead of the local VPN. */
     val useRoot: Boolean = false,
+    /** Root was probed once on first launch, so we don't prompt su again. */
+    val rootProbed: Boolean = false,
     val profiles: List<Profile> = emptyList(),
 )
 
@@ -66,6 +68,7 @@ fun Settings.toJson(): String = JSONObject().apply {
     put("limitingEnabled", limitingEnabled)
     put("monitorEnabled", monitorEnabled)
     put("useRoot", useRoot)
+    put("rootProbed", rootProbed)
     put("profiles", JSONArray().apply { profiles.forEach { put(it.toJsonObject()) } })
 }.toString()
 
@@ -79,6 +82,7 @@ fun settingsFromJson(text: String): Settings {
         limitingEnabled = o.optBoolean("limitingEnabled", false),
         monitorEnabled = o.optBoolean("monitorEnabled", true),
         useRoot = o.optBoolean("useRoot", false),
+        rootProbed = o.optBoolean("rootProbed", false),
         profiles = profiles,
     )
 }
