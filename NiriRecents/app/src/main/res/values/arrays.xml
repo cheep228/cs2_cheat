@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Launchers that host Android's Recents (Quickstep). The module skips any process without it. -->
+    <string-array name="xposed_scope">
+        <item>com.nothing.launcher</item>
+        <item>com.android.launcher3</item>
+        <item>com.google.android.apps.nexuslauncher</item>
+        <item>com.niri.recents</item>
+    </string-array>
+</resources>

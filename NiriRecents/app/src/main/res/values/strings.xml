@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Niri Recents</string>
+    <string name="xposed_description">Обзор недавних приложений в стиле niri: рабочие столы друг под другом, окна в горизонтальной ленте, фокус-кольцо и пружинные анимации.</string>
+</resources>
