@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -54,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -252,24 +254,28 @@ private fun PreviewCard(s: NiriSettings, wallpaper: android.graphics.Bitmap?) {
         Column(Modifier.padding(16.dp)) {
             Text("Предпросмотр", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Можно трогать: листайте, смахивайте окно вверх, зажмите окно и перетащите на другой стол.",
+                "Уменьшенная копия экрана. Можно трогать: листайте, смахивайте окно вверх, зажмите окно и перетащите на другой стол.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val frameWidth = maxWidth * 0.8f
+                // Everything inside is the real screen scaled down, gaps and text included.
+                val scale = with(LocalDensity.current) { frameWidth.toPx() } / dm.widthPixels.coerceAtLeast(1)
+                val density = dm.density * scale
                 Box(
                     Modifier
-                        .fillMaxWidth(0.78f)
+                        .width(frameWidth)
                         .aspectRatio(aspect)
-                        .clip(RoundedCornerShape(28.dp))
-                        .border(2.dp, Color(0xFF3A3A3A), RoundedCornerShape(28.dp)),
+                        .clip(RoundedCornerShape(24.dp))
+                        .border(1.5.dp, Color(0xFF3A3A3A), RoundedCornerShape(24.dp)),
                 ) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
-                        factory = { c -> buildPreview(c, s) },
+                        factory = { c -> buildPreview(c, s, density) },
                         update = { v ->
-                            v.style = OverviewStyle(s, v.resources.displayMetrics.density)
+                            v.style = OverviewStyle(s, density)
                             v.wallpaper = wallpaper
                         },
                     )
@@ -279,10 +285,10 @@ private fun PreviewCard(s: NiriSettings, wallpaper: android.graphics.Bitmap?) {
     }
 }
 
-private fun buildPreview(c: android.content.Context, s: NiriSettings): NiriOverviewView {
+private fun buildPreview(c: android.content.Context, s: NiriSettings, density: Float): NiriOverviewView {
     val v = NiriOverviewView(c)
     v.respectSystemGestures = false
-    v.style = OverviewStyle(s, c.resources.displayMetrics.density)
+    v.style = OverviewStyle(s, density)
     val apps = DemoData.installedApps(c)
     val dm = c.resources.displayMetrics
     val reset = {
@@ -315,17 +321,19 @@ private fun LookCard(s: NiriSettings, wpStatus: String?, update: (NiriSettings) 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Внешний вид", style = MaterialTheme.typography.titleMedium)
-            LabeledSlider("Масштаб обзора (zoom)", s.zoom, 0.3f..0.75f, "%.2f".format(s.zoom)) { update(s.copy(zoom = it)) }
-            LabeledSlider("Отступы между окнами (gaps)", s.gapsDp, 0f..40f, "${s.gapsDp.roundToInt()} dp") {
+            LabeledSlider("Размер окон (zoom)", s.zoom, 0.25f..0.5f, "${(s.zoom * 100).roundToInt()}% экрана") {
+                update(s.copy(zoom = (it * 100).roundToInt() / 100f))
+            }
+            LabeledSlider("Отступы между окнами (gaps)", s.gapsDp, 4f..32f, "${s.gapsDp.roundToInt()} dp") {
                 update(s.copy(gapsDp = it.roundToInt().toFloat()))
             }
-            LabeledSlider("Расстояние между столами", s.workspaceGapDp, 4f..80f, "${s.workspaceGapDp.roundToInt()} dp") {
+            LabeledSlider("Расстояние между столами", s.workspaceGapDp, 4f..48f, "${s.workspaceGapDp.roundToInt()} dp") {
                 update(s.copy(workspaceGapDp = it.roundToInt().toFloat()))
             }
-            LabeledSlider("Скругление углов", s.cornerDp, 0f..40f, "${s.cornerDp.roundToInt()} dp") {
+            LabeledSlider("Скругление углов окон", s.cornerDp, 0f..32f, "${s.cornerDp.roundToInt()} dp") {
                 update(s.copy(cornerDp = it.roundToInt().toFloat()))
             }
-            LabeledSlider("Толщина фокус-кольца", s.ringWidthDp, 0f..10f, "${s.ringWidthDp.roundToInt()} dp") {
+            LabeledSlider("Толщина фокус-кольца", s.ringWidthDp, 0f..8f, "${s.ringWidthDp.roundToInt()} dp") {
                 update(s.copy(ringWidthDp = it.roundToInt().toFloat()))
             }
             LabeledSlider("Скорость анимаций", s.animSpeed, 0.5f..2f, "×%.1f".format(s.animSpeed)) {
@@ -338,13 +346,13 @@ private fun LookCard(s: NiriSettings, wpStatus: String?, update: (NiriSettings) 
             CheckRow(
                 s.wallpaper,
                 "Ваши обои на рабочих столах",
-                "Как в niri: стол — уменьшенный экран с обоями. Копируются через root при открытии этого приложения" +
+                "Как в niri: под окнами каждого стола ваши обои. Копируются через root при открытии этого приложения" +
                     (if (s.wallpaper && wpStatus != null) ".\n$wpStatus" else ""),
             ) {
                 update(s.copy(wallpaper = it))
             }
             CheckRow(s.shadows, "Тени под столами", "workspace-shadow из niri") { update(s.copy(shadows = it)) }
-            CheckRow(s.labels, "Подписи приложений", "Название под каждым окном") { update(s.copy(labels = it)) }
+            CheckRow(s.labels, "Подписи приложений", "Иконка и название под каждым окном") { update(s.copy(labels = it)) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { update(NiriSettings(enabled = s.enabled, resetToken = s.resetToken)) }) {
                     Text("Как в niri")

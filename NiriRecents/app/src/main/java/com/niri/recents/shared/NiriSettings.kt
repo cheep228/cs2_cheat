@@ -3,19 +3,20 @@ package com.niri.recents.shared
 import android.os.Bundle
 
 /**
- * Everything the user can tune. Defaults follow niri's own defaults where niri has one:
- * zoom 0.5, gaps 16, focus ring 4 with #7fc8ff / #505050, backdrop #262626.
+ * Everything the user can tune. Colours follow niri's defaults (focus ring #7fc8ff / #505050,
+ * backdrop #262626); sizes are on-screen sizes in the overview, chosen for a phone.
  *
  * Shared by the settings app (which stores it) and the hook inside the launcher
  * (which reads it through [SettingsContract]).
  */
 data class NiriSettings(
     val enabled: Boolean = true,
-    val zoom: Float = 0.5f,
-    val gapsDp: Float = 16f,
-    val workspaceGapDp: Float = 28f,
-    val cornerDp: Float = 18f,
-    val ringWidthDp: Float = 4f,
+    /** Window size in the overview, as a fraction of the screen. */
+    val zoom: Float = 0.34f,
+    val gapsDp: Float = 12f,
+    val workspaceGapDp: Float = 14f,
+    val cornerDp: Float = 14f,
+    val ringWidthDp: Float = 3f,
     val ringActive: Int = 0xFF7FC8FF.toInt(),
     val ringInactive: Int = 0xFF505050.toInt(),
     val backdrop: Int = 0xFF262626.toInt(),

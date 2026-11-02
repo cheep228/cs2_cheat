@@ -12,8 +12,8 @@ android {
         applicationId = "com.niri.recents"
         minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     buildTypes {
@@ -43,6 +43,9 @@ android {
                 test.systemProperty("robolectric.offline", "true")
                 test.systemProperty("robolectric.dependency.dir", it)
             }
+            // -PpreviewThumbs=/dir, -PpreviewWallpaper=/file: render the previews with real pictures.
+            (project.findProperty("previewThumbs") as String?)?.let { test.systemProperty("niri.thumbs", it) }
+            (project.findProperty("previewWallpaper") as String?)?.let { test.systemProperty("niri.wallpaper", it) }
         }
     }
 }

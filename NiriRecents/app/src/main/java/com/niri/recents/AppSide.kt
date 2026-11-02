@@ -30,18 +30,23 @@ object ModuleStatus {
 
 /** Settings as the user set them in this app. */
 object SettingsStore {
+    /** 2: sizes became on-screen sizes for the phone layout; older ones are dropped. */
+    private const val VERSION = 2
+
     private fun prefs(c: Context) = c.getSharedPreferences("niri_settings", Context.MODE_PRIVATE)
 
     fun load(c: Context): NiriSettings {
         val p = prefs(c)
         val d = NiriSettings()
+        val sizes = p.getInt("ver", 1) >= VERSION
+        fun size(key: String, def: Float) = if (sizes) p.getFloat(key, def) else def
         return NiriSettings(
             enabled = p.getBoolean("enabled", d.enabled),
-            zoom = p.getFloat("zoom", d.zoom),
-            gapsDp = p.getFloat("gaps", d.gapsDp),
-            workspaceGapDp = p.getFloat("wsGap", d.workspaceGapDp),
-            cornerDp = p.getFloat("corner", d.cornerDp),
-            ringWidthDp = p.getFloat("ring", d.ringWidthDp),
+            zoom = size("zoom", d.zoom),
+            gapsDp = size("gaps", d.gapsDp),
+            workspaceGapDp = size("wsGap", d.workspaceGapDp),
+            cornerDp = size("corner", d.cornerDp),
+            ringWidthDp = size("ring", d.ringWidthDp),
             ringActive = p.getInt("ringActive", d.ringActive),
             ringInactive = p.getInt("ringInactive", d.ringInactive),
             backdrop = p.getInt("backdrop", d.backdrop),
@@ -56,6 +61,7 @@ object SettingsStore {
 
     fun save(c: Context, s: NiriSettings) {
         prefs(c).edit()
+            .putInt("ver", VERSION)
             .putBoolean("enabled", s.enabled)
             .putFloat("zoom", s.zoom)
             .putFloat("gaps", s.gapsDp)

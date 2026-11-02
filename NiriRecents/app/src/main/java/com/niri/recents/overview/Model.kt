@@ -27,7 +27,7 @@ class OvColumn(
     /** Where the layout puts it this frame. */
     internal val base = RectF()
 
-    /** Where it was actually drawn (base + animated offsets); used for hit testing. */
+    /** Where it is actually drawn (base + animated offsets); used for hit testing. */
     internal val rect = RectF()
 
     // Offsets that decay to zero, so layout changes slide instead of jumping.
@@ -41,9 +41,12 @@ class OvColumn(
 
 /** A niri workspace: a horizontal strip of columns with its own scroll position. */
 class OvWorkspace(val id: Int, val columns: MutableList<OvColumn> = mutableListOf()) {
-    /** Strip scroll, in unzoomed pixels. */
+    /** Strip scroll, in pixels. */
     internal val viewX = Spring(0f, 800f, 1f, 0.5f)
     internal val dy = Spring(0f, 800f, 1f, 0.5f)
+
+    /** 1 = full height; 0 = the slim empty workspace at the bottom. */
+    internal val grow = Spring(1f, 800f, 1f, 0.002f)
 
     /** Index of the focused column; -1 until chosen. */
     internal var focus = -1
