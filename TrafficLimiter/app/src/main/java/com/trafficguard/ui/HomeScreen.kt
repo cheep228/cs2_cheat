@@ -37,7 +37,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +60,11 @@ import com.trafficguard.data.fmtDuration
 import com.trafficguard.data.quotaName
 import com.trafficguard.service.NetworkWatcher
 import com.trafficguard.service.Perms
+import com.trafficguard.service.RootShell
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.trafficguard.service.TrafficService
 import java.text.DateFormat
 import java.util.Date
@@ -109,11 +117,12 @@ fun HomeScreen(onOpenProfile: (String) -> Unit) {
                             SettingsRepo.update { it.copy(monitorEnabled = v) }
                             if (v) TrafficService.start(ctx) else TrafficService.stop(ctx)
                         }
+                        RootToggle(settings.useRoot)
                     }
                 }
             }
             item { StatusCard(live, settings.profiles.firstOrNull { it.id == live.profileId }, settings.limitingEnabled) }
-            item { PermissionsCard(settings.profiles) }
+            item { PermissionsCard(settings.profiles, settings.useRoot) }
             item {
                 Text(
                     "Сети",
@@ -197,6 +206,14 @@ private fun StatusCard(live: LiveStatus, profile: Profile?, limiting: Boolean) {
                 else -> "✓ " + d.note
             }
             Text(state, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            if (live.viaRoot) {
+                Text(
+                    "Блокировка: root (iptables)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            live.rootError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             if (live.vpnPermissionMissing) {
                 Text("Нет разрешения VPN — блокировка не работает!", color = MaterialTheme.colorScheme.error)
             }
@@ -211,17 +228,17 @@ private fun StatusCard(live: LiveStatus, profile: Profile?, limiting: Boolean) {
 private data class PermItem(val title: String, val text: String, val button: String, val action: () -> Unit)
 
 @Composable
-private fun PermissionsCard(profiles: List<Profile>) {
+private fun PermissionsCard(profiles: List<Profile>, useRoot: Boolean) {
     val ctx = LocalContext.current
     val tick = rememberResumeTick()
     val vpnLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
 
-    val items = remember(tick, profiles) {
+    val items = remember(tick, profiles, useRoot) {
         val needSsid = profiles.any { it.type == NetType.WIFI && it.ssid.isNotBlank() }
         val needUsage = profiles.any { p -> p.blockBackground || p.apps.values.any { it.dailyLimit > 0 } }
         buildList {
-            if (!Perms.vpn(ctx)) add(PermItem(
+            if (!useRoot && !Perms.vpn(ctx)) add(PermItem(
                 "Разрешение VPN",
                 "Нужно для блокировки приложений. Трафик никуда не отправляется — пакеты заблокированных приложений просто отбрасываются на телефоне.",
                 "Разрешить",
@@ -327,6 +344,36 @@ private fun ProfileItem(p: Profile, active: Boolean, onClick: () -> Unit) {
                 Text(limitsText(p), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.padding(end = 8.dp))
+        }
+    }
+}
+
+/** Root checkbox: enabling it first checks that su really works. */
+@Composable
+private fun RootToggle(useRoot: Boolean) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
+    CheckRow(
+        checked = useRoot,
+        title = if (checking) "Проверка root…" else "Блокировать через root (iptables)",
+        subtitle = "Вместо VPN: можно пользоваться своим VPN, заблокированные приложения сразу получают отказ, " +
+            "а не ждут таймаута. Нужны права суперпользователя (Magisk / KernelSU).",
+        enabled = !checking,
+    ) { v ->
+        if (!v) {
+            SettingsRepo.update { it.copy(useRoot = false) }
+            return@CheckRow
+        }
+        checking = true
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { RootShell.available() }
+            checking = false
+            if (ok) {
+                SettingsRepo.update { it.copy(useRoot = true) }
+            } else {
+                Toast.makeText(ctx, "Root недоступен: su не дал права. Разрешите доступ в менеджере root.", Toast.LENGTH_LONG).show()
+            }
         }
     }
 }

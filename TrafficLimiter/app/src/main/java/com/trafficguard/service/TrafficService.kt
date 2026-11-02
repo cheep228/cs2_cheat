@@ -94,6 +94,19 @@ class TrafficService : VpnService() {
     private var vpnError: String? = null
     private var stopping = false
 
+    // Root (iptables) blocking state.
+    private var usingRoot = false
+    private val statePrefs by lazy { getSharedPreferences("state", MODE_PRIVATE) }
+
+    /** Persisted so rules left behind by a killed process get cleaned up on the next start. */
+    private var rootRulesActive: Boolean
+        get() = statePrefs.getBoolean("root_rules", false)
+        set(v) {
+            statePrefs.edit().putBoolean("root_rules", v).apply()
+        }
+    private var rootError: String? = null
+    private var rootRetryAt = 0L
+
     private val tick = object : Runnable {
         override fun run() {
             try {
@@ -113,6 +126,12 @@ class TrafficService : VpnService() {
         foreground = ForegroundTracker(this)
         worker = HandlerThread("traffic").also { it.start() }
         handler = Handler(worker.looper)
+        handler.post {
+            if (rootRulesActive && !SettingsRepo.settings.value.useRoot) {
+                RootFirewall.clear()
+                rootRulesActive = false
+            }
+        }
         handler.post(tick)
     }
 
@@ -122,6 +141,8 @@ class TrafficService : VpnService() {
                 stopping = true
                 handler.post {
                     closeTun()
+                    if (rootRulesActive) RootFirewall.clear()
+                    rootRulesActive = false
                     UsageStore.save()
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -146,6 +167,10 @@ class TrafficService : VpnService() {
         stopping = true
         if (::handler.isInitialized) handler.removeCallbacksAndMessages(null)
         closeTun()
+        if (rootRulesActive) {
+            rootRulesActive = false
+            Thread { RootFirewall.clear() }.start()
+        }
         if (::network.isInitialized) network.stop()
         if (::worker.isInitialized) worker.quitSafely()
         UsageStore.save()
@@ -196,7 +221,7 @@ class TrafficService : VpnService() {
             ownPackage = packageName,
             now = now,
         )
-        applyPlan(decision.plan)
+        applyPlan(decision.plan, settings.useRoot)
 
         if (decision.exceeded != null && decision.exceeded != lastExceeded && profile != null) {
             alertExceeded(profile, decision.exceeded, now)
@@ -211,8 +236,10 @@ class TrafficService : VpnService() {
             bytesPerSecond = speed,
             decision = decision,
             foreground = fg,
-            vpnPermissionMissing = vpnPermissionMissing,
-            vpnError = vpnError,
+            vpnPermissionMissing = vpnPermissionMissing && !usingRoot,
+            vpnError = vpnError.takeIf { !usingRoot },
+            viaRoot = usingRoot,
+            rootError = rootError.takeIf { usingRoot },
         )
         updateNotification(net, profile, usage, speed, decision, now)
 
@@ -238,7 +265,52 @@ class TrafficService : VpnService() {
 
     // ------------------------------------------------------------------ VPN
 
-    private fun applyPlan(p: BlockPlan) {
+    private fun applyPlan(p: BlockPlan, useRoot: Boolean) {
+        if (useRoot != usingRoot) {
+            // Switching method: tear down the old one and force a fresh apply.
+            closeTun()
+            if (rootRulesActive) RootFirewall.clear()
+            rootRulesActive = false
+            rootError = null
+            rootRetryAt = 0
+            vpnError = null
+            plan = BlockPlan.None
+            usingRoot = useRoot
+            if (!useRoot) {
+                applyVpn(p)
+                return
+            }
+            applyRoot(p, force = true)
+            return
+        }
+        if (useRoot) applyRoot(p, force = false) else applyVpn(p)
+    }
+
+    private fun applyRoot(p: BlockPlan, force: Boolean) {
+        val inSync = p == plan && rootError == null && (p == BlockPlan.None || rootRulesActive)
+        if (inSync && !force) return
+        if (p == BlockPlan.None && !rootRulesActive) {
+            plan = p
+            rootError = null
+            return
+        }
+        // After a failure, don't hammer su (and the root manager's prompt) every second.
+        val now = SystemClock.elapsedRealtime()
+        if (rootError != null && now < rootRetryAt) return
+        val r = if (p == BlockPlan.None) RootFirewall.clear() else RootFirewall.apply(this, p)
+        if (r.ok) {
+            plan = p
+            rootRulesActive = p != BlockPlan.None
+            rootError = null
+        } else {
+            Log.w(TAG, "root apply failed: ${r.output}")
+            rootError = "Root-блокировка не сработала: " + r.output.lineSequence().firstOrNull().orEmpty().ifBlank { "нет доступа su" }
+            rootRetryAt = now + 30_000
+            plan = BlockPlan.None
+        }
+    }
+
+    private fun applyVpn(p: BlockPlan) {
         if (p == plan && (p == BlockPlan.None || tun != null)) return
         if (p == BlockPlan.None) {
             closeTun()
@@ -439,7 +511,8 @@ class TrafficService : VpnService() {
             } else {
                 append(d.note)
             }
-            if (vpnPermissionMissing) append("\nНет разрешения VPN — блокировка не работает")
+            if (vpnPermissionMissing && !usingRoot) append("\nНет разрешения VPN — блокировка не работает")
+            if (usingRoot && rootError != null) append("\n").append(rootError)
         }
         val t = SystemClock.elapsedRealtime()
         if (title == notifTitle && text == lastNotifText) return

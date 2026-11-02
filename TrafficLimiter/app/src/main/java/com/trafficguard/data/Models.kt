@@ -55,6 +55,8 @@ data class Settings(
     val limitingEnabled: Boolean = false,
     /** Keep the background service running (counting + enforcing). */
     val monitorEnabled: Boolean = true,
+    /** Block with iptables through root instead of the local VPN. */
+    val useRoot: Boolean = false,
     val profiles: List<Profile> = emptyList(),
 )
 
@@ -63,6 +65,7 @@ data class Settings(
 fun Settings.toJson(): String = JSONObject().apply {
     put("limitingEnabled", limitingEnabled)
     put("monitorEnabled", monitorEnabled)
+    put("useRoot", useRoot)
     put("profiles", JSONArray().apply { profiles.forEach { put(it.toJsonObject()) } })
 }.toString()
 
@@ -75,6 +78,7 @@ fun settingsFromJson(text: String): Settings {
     return Settings(
         limitingEnabled = o.optBoolean("limitingEnabled", false),
         monitorEnabled = o.optBoolean("monitorEnabled", true),
+        useRoot = o.optBoolean("useRoot", false),
         profiles = profiles,
     )
 }

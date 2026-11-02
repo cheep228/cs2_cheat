@@ -99,6 +99,9 @@ data class LiveStatus(
     val foreground: String? = null,
     val vpnPermissionMissing: Boolean = false,
     val vpnError: String? = null,
+    /** True when blocking goes through root iptables rather than the VPN. */
+    val viaRoot: Boolean = false,
+    val rootError: String? = null,
 )
 
 object Live {
