@@ -92,4 +92,10 @@ object SettingsContract {
     const val URI = "content://$AUTHORITY"
     const val METHOD_GET = "get"
     const val METHOD_REPORT = "report"
+
+    /** In the "get" bundle: when the copied wallpaper last changed (0 = none). */
+    const val KEY_WALLPAPER_STAMP = "wallpaperStamp"
+
+    /** The real wallpaper, copied with root, served as a file. */
+    const val WALLPAPER_URI = "$URI/wallpaper"
 }

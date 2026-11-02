@@ -42,6 +42,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,7 @@ import com.niri.recents.ModuleStatus
 import com.niri.recents.RecentsInfo
 import com.niri.recents.RootShell
 import com.niri.recents.SettingsStore
+import com.niri.recents.WallpaperSync
 import com.niri.recents.overview.DemoData
 import com.niri.recents.overview.NiriOverviewView
 import com.niri.recents.overview.OvColumn
@@ -132,6 +134,16 @@ fun SettingsScreen() {
     val diag = remember(tick, diagVersion) { DiagStore.lines(ctx) }
     val launcherSeen = diag.any { it.contains("Подключено") }
 
+    // The launcher can't read the real wallpaper itself; copy it with root whenever we're opened.
+    var wpStatus by remember { mutableStateOf<String?>(null) }
+    var wpBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(tick, s.wallpaper) {
+        if (!s.wallpaper) return@LaunchedEffect
+        val err = withContext(Dispatchers.IO) { WallpaperSync.sync(ctx) }
+        wpStatus = if (err == null) "Ваши обои скопированы" else "Обои не скопированы: $err"
+        wpBitmap = withContext(Dispatchers.IO) { WallpaperSync.load(ctx, 720) }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -169,8 +181,8 @@ fun SettingsScreen() {
                     }
                 }
             }
-            item { PreviewCard(s) }
-            item { LookCard(s, update) }
+            item { PreviewCard(s, wpBitmap) }
+            item { LookCard(s, wpStatus, update) }
             item { GesturesCard() }
             item {
                 DiagCard(
@@ -192,7 +204,8 @@ fun SettingsScreen() {
 
 @Composable
 private fun StatusCard(active: Boolean, launcherSeen: Boolean, recentsPkg: String, onRestart: () -> Unit) {
-    val ok = active && launcherSeen
+    // The launcher's own report is the real proof; Vector doesn't always hook this app itself.
+    val ok = launcherSeen
     Card(
         Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -209,14 +222,16 @@ private fun StatusCard(active: Boolean, launcherSeen: Boolean, recentsPkg: Strin
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            Text("Модуль в Vector: " + if (active) "активен" else "не активен", style = MaterialTheme.typography.bodyMedium)
-            Text("Лаунчер подключился: " + if (launcherSeen) "да" else "ещё нет", style = MaterialTheme.typography.bodyMedium)
+            Text("Модуль в лаунчере: " + if (launcherSeen) "работает" else "ещё не отзывался", style = MaterialTheme.typography.bodyMedium)
+            if (!launcherSeen) {
+                Text("Модуль в Vector: " + if (active) "активен" else "не видно", style = MaterialTheme.typography.bodyMedium)
+            }
             Text("«Недавние» рисует: $recentsPkg", style = MaterialTheme.typography.bodyMedium)
             if (!ok) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "1. Откройте Vector → Модули → Niri Recents, включите модуль.\n" +
-                        "2. В области действия отметьте $recentsPkg (и сам Niri Recents).\n" +
+                        "2. В области действия отметьте $recentsPkg.\n" +
                         "3. Нажмите «Перезапустить лаунчер» ниже, затем откройте «Недавние».",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -229,7 +244,7 @@ private fun StatusCard(active: Boolean, launcherSeen: Boolean, recentsPkg: Strin
 }
 
 @Composable
-private fun PreviewCard(s: NiriSettings) {
+private fun PreviewCard(s: NiriSettings, wallpaper: android.graphics.Bitmap?) {
     val ctx = LocalContext.current
     val dm = ctx.resources.displayMetrics
     val aspect = dm.widthPixels.toFloat() / dm.heightPixels.coerceAtLeast(1)
@@ -253,7 +268,10 @@ private fun PreviewCard(s: NiriSettings) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { c -> buildPreview(c, s) },
-                        update = { v -> v.style = OverviewStyle(s, v.resources.displayMetrics.density) },
+                        update = { v ->
+                            v.style = OverviewStyle(s, v.resources.displayMetrics.density)
+                            v.wallpaper = wallpaper
+                        },
                     )
                 }
             }
@@ -293,7 +311,7 @@ private val BackdropColors = listOf(0xFF262626, 0xFF000000, 0xFF101010, 0xFF1E1E
 private val WorkspaceColors = listOf(0xFF3A3A3A, 0xFF2A2A2A, 0xFF1A1A1A, 0xFF313244, 0xFF3B4252)
 
 @Composable
-private fun LookCard(s: NiriSettings, update: (NiriSettings) -> Unit) {
+private fun LookCard(s: NiriSettings, wpStatus: String?, update: (NiriSettings) -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Внешний вид", style = MaterialTheme.typography.titleMedium)
@@ -317,7 +335,12 @@ private fun LookCard(s: NiriSettings, update: (NiriSettings) -> Unit) {
             ColorRow("Кольцо на других столах", InactiveColors, s.ringInactive) { update(s.copy(ringInactive = it)) }
             ColorRow("Фон за столами (backdrop)", BackdropColors, s.backdrop) { update(s.copy(backdrop = it)) }
             ColorRow("Цвет стола без обоев", WorkspaceColors, s.workspaceColor) { update(s.copy(workspaceColor = it)) }
-            CheckRow(s.wallpaper, "Обои на рабочих столах", "Как в niri: стол — уменьшенный экран с обоями") {
+            CheckRow(
+                s.wallpaper,
+                "Ваши обои на рабочих столах",
+                "Как в niri: стол — уменьшенный экран с обоями. Копируются через root при открытии этого приложения" +
+                    (if (s.wallpaper && wpStatus != null) ".\n$wpStatus" else ""),
+            ) {
                 update(s.copy(wallpaper = it))
             }
             CheckRow(s.shadows, "Тени под столами", "workspace-shadow из niri") { update(s.copy(shadows = it)) }

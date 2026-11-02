@@ -11,6 +11,7 @@ import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.PixelFormat
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -412,39 +413,51 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
         }
     }
 
-    // Runs inside the launcher, which usually holds READ_WALLPAPER_INTERNAL; failures fall back to a colour.
+    /**
+     * The workspace background. The launcher can't read the real wallpaper itself (without
+     * READ_WALLPAPER_INTERNAL Android hands out the stock default one), so it comes from the
+     * settings app, which copies it with root. Never fall back to someone else's picture:
+     * without the real one the workspaces stay a plain colour.
+     */
     @SuppressLint("MissingPermission")
     private fun loadWallpaper() {
-        if (cachedWallpaper != null && SystemClock.uptimeMillis() - wallpaperAt < 10 * 60_000L) return
+        val stamp = Remote.wallpaperStamp
+        if (cachedWallpaper != null && stamp == wallpaperStampLoaded) return
         val app = context.applicationContext ?: context
         Bg.handler.post {
-            val bmp = try {
-                val d = WallpaperManager.getInstance(app).drawable
-                if (d == null || d.intrinsicWidth <= 0 || d.intrinsicHeight <= 0) {
-                    null
-                } else {
-                    val tw = 540
-                    val th = (tw.toFloat() * d.intrinsicHeight / d.intrinsicWidth).toInt().coerceIn(1, 4096)
-                    val out = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
-                    d.setBounds(0, 0, tw, th)
-                    d.draw(Canvas(out))
-                    out
+            var bmp = if (stamp > 0L) Remote.loadWallpaper(app, 720) else null
+            if (bmp == null) {
+                val wm = WallpaperManager.getInstance(app)
+                val allowed = app.checkSelfPermission("android.permission.READ_WALLPAPER_INTERNAL") ==
+                    PackageManager.PERMISSION_GRANTED
+                if (allowed && wm.wallpaperInfo == null) {
+                    bmp = try {
+                        drawableToBitmap(wm.drawable)
+                    } catch (t: Throwable) {
+                        null
+                    }
                 }
-            } catch (t: Throwable) {
-                if (!wallpaperFailReported) {
-                    wallpaperFailReported = true
-                    Remote.report(context, "Обои недоступны лаунчеру ($t), рабочие столы будут цветом")
-                }
-                null
             }
-            if (bmp != null) {
-                main.post {
-                    cachedWallpaper = bmp
-                    wallpaperAt = SystemClock.uptimeMillis()
-                    view?.wallpaper = bmp
-                }
+            if (bmp == null && !wallpaperFailReported) {
+                wallpaperFailReported = true
+                Remote.report(context, "Обоев нет: откройте Niri Recents, он скопирует их через root. Пока столы цветом.")
+            }
+            main.post {
+                cachedWallpaper = bmp
+                wallpaperStampLoaded = stamp
+                view?.wallpaper = bmp
             }
         }
+    }
+
+    private fun drawableToBitmap(d: android.graphics.drawable.Drawable?): Bitmap? {
+        if (d == null || d.intrinsicWidth <= 0 || d.intrinsicHeight <= 0) return null
+        val tw = 720
+        val th = (tw.toFloat() * d.intrinsicHeight / d.intrinsicWidth).toInt().coerceIn(1, 4096)
+        val out = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+        d.setBounds(0, 0, tw, th)
+        d.draw(Canvas(out))
+        return out
     }
 
     // ------------------------------------------------------------ NiriOverviewView.Host
@@ -491,7 +504,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
 
         @Volatile
         private var cachedWallpaper: Bitmap? = null
-        private var wallpaperAt = 0L
+        private var wallpaperStampLoaded = -1L
         private var wallpaperFailReported = false
     }
 }

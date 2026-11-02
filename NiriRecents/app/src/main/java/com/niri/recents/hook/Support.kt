@@ -31,6 +31,10 @@ internal object Remote {
     @Volatile
     private var lastRefresh = 0L
 
+    /** Version of the wallpaper copy the settings app holds (0 = none yet). */
+    @Volatile
+    var wallpaperStamp = 0L
+
     fun refresh(context: Context, force: Boolean = false) {
         val now = SystemClock.uptimeMillis()
         if (!force && now - lastRefresh < 4_000) return
@@ -39,11 +43,29 @@ internal object Remote {
         Bg.handler.post {
             try {
                 val b = app.contentResolver.call(uri, SettingsContract.METHOD_GET, null, null)
-                if (b != null) cached = NiriSettings.fromBundle(b)
+                if (b != null) {
+                    cached = NiriSettings.fromBundle(b)
+                    wallpaperStamp = b.getLong(SettingsContract.KEY_WALLPAPER_STAMP, 0L)
+                }
             } catch (t: Throwable) {
                 // Settings app missing or not reachable: keep defaults.
             }
         }
+    }
+
+    /** The real wallpaper copied by the settings app. Blocking. */
+    fun loadWallpaper(context: Context, width: Int): android.graphics.Bitmap? = try {
+        val app = context.applicationContext ?: context
+        val bytes = app.contentResolver.openInputStream(Uri.parse(SettingsContract.WALLPAPER_URI))?.use { it.readBytes() }
+        bytes?.let {
+            val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size, o)
+            var sample = 1
+            while (o.outWidth / (sample * 2) >= width) sample *= 2
+            android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        }
+    } catch (t: Throwable) {
+        null
     }
 
     fun report(context: Context, message: String) {

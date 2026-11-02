@@ -11,6 +11,10 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.io.File
 import com.niri.recents.shared.NiriSettings
 import com.niri.recents.shared.SettingsContract
 import java.text.SimpleDateFormat
@@ -103,7 +107,10 @@ class SettingsProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val c = context ?: return null
         return when (method) {
-            SettingsContract.METHOD_GET -> SettingsStore.load(c).toBundle()
+            SettingsContract.METHOD_GET -> SettingsStore.load(c).toBundle().apply {
+                val f = WallpaperSync.file(c)
+                putLong(SettingsContract.KEY_WALLPAPER_STAMP, if (f.exists()) f.lastModified() else 0L)
+            }
             SettingsContract.METHOD_REPORT -> {
                 if (callerIsSystemApp(c) && arg != null) DiagStore.add(c, arg.take(1500))
                 null
@@ -122,6 +129,13 @@ class SettingsProvider : ContentProvider() {
                 false
             }
         }
+    }
+
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
+        val c = context ?: return null
+        if (uri.lastPathSegment != "wallpaper" || !callerIsSystemApp(c)) return null
+        val f = WallpaperSync.file(c)
+        return if (f.exists()) ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY) else null
     }
 
     override fun query(uri: Uri, p: Array<out String>?, s: String?, a: Array<out String>?, o: String?): Cursor? = null
@@ -148,6 +162,46 @@ object RecentsInfo {
     }
 }
 
+/**
+ * The real system wallpaper. Since Android 14 apps without READ_WALLPAPER_INTERNAL (the launcher
+ * among them) get the stock default wallpaper instead, so it is copied here with root and
+ * handed to the launcher through [SettingsProvider].
+ */
+object WallpaperSync {
+    private val sources = listOf("/data/system/users/0/wallpaper", "/data/system/users/0/wallpaper_orig")
+
+    fun file(c: Context) = File(c.filesDir, "wallpaper.jpg")
+
+    /** Returns null on success, or a reason. Blocking; call off the main thread. */
+    fun sync(c: Context): String? {
+        for (path in sources) {
+            val bytes = RootShell.readBytes(path) ?: continue
+            if (bytes.size < 1024) continue
+            val bmp = decodeScaled(bytes, 1080) ?: continue
+            val tmp = File(c.filesDir, "wallpaper.tmp")
+            tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            if (!tmp.renameTo(file(c))) return "не удалось сохранить"
+            return null
+        }
+        return "нет доступа к $sources (root?) или стоят живые обои"
+    }
+
+    fun load(c: Context, width: Int): Bitmap? {
+        val f = file(c)
+        if (!f.exists()) return null
+        return decodeScaled(f.readBytes(), width)
+    }
+
+    fun decodeScaled(bytes: ByteArray, width: Int): Bitmap? {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o)
+        if (o.outWidth <= 0) return null
+        var sample = 1
+        while (o.outWidth / (sample * 2) >= width) sample *= 2
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+}
+
 /** Minimal `su` runner. */
 object RootShell {
     fun run(script: String, timeoutSec: Long = 20): Pair<Boolean, String> = try {
@@ -165,5 +219,22 @@ object RootShell {
         }
     } catch (e: Exception) {
         false to (e.message ?: "su недоступен")
+    }
+
+    /** Raw bytes of a root-only file, or null. */
+    fun readBytes(path: String, timeoutSec: Long = 15): ByteArray? = try {
+        val p = ProcessBuilder("su", "-c", "cat '$path'").start()
+        var bytes: ByteArray? = null
+        val reader = Thread { bytes = runCatching { p.inputStream.readBytes() }.getOrNull() }
+        reader.start()
+        if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) {
+            p.destroy()
+            null
+        } else {
+            reader.join(5_000)
+            bytes.takeIf { p.exitValue() == 0 }
+        }
+    } catch (e: Exception) {
+        null
     }
 }
