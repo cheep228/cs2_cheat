@@ -1,7 +1,12 @@
 package com.niri.recents
 
+import android.graphics.Rect
 import com.niri.recents.overview.ColumnKeyInfo
 import com.niri.recents.overview.Spring
+import com.niri.recents.overview.TileMath
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import com.niri.recents.overview.WorkspaceArranger
 import com.niri.recents.overview.WsJson
 import com.niri.recents.overview.WsState
@@ -107,6 +112,42 @@ class ArrangerTest {
     fun stateRoundTripsThroughJson() {
         val s = WsState(listOf(3, 1), mapOf(3 to listOf("12", "15+16"), 1 to listOf("7")), 3, 9)
         assertEquals(s, WsJson.decode(WsJson.encode(s)))
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class TileMathTest {
+    private val area = Rect(0, 0, 1000, 2000)
+
+    @Test
+    fun dwindleSplitsTheLongerSideEachTime() {
+        assertEquals(listOf(area), TileMath.dwindle(1, area, 10))
+        // Portrait: two windows one above the other.
+        assertEquals(listOf(Rect(0, 0, 1000, 995), Rect(0, 1005, 1000, 2000)), TileMath.dwindle(2, area, 10))
+        // The bottom half is wider than tall: the third window goes beside the second.
+        val three = TileMath.dwindle(3, area, 10)
+        assertEquals(Rect(0, 0, 1000, 995), three[0])
+        assertEquals(Rect(0, 1005, 495, 2000), three[1])
+        assertEquals(Rect(505, 1005, 1000, 2000), three[2])
+    }
+
+    @Test
+    fun toggleSplitTurnsTheSplit() {
+        val two = TileMath.dwindle(2, area, 10) { it == 0 }
+        assertEquals(listOf(Rect(0, 0, 495, 2000), Rect(505, 0, 1000, 2000)), two)
+    }
+
+    @Test
+    fun niriShowsAsManyColumnsAsFitAndCentresAShortRow() {
+        val half = 495
+        // Three half-width columns: focus on the last scrolls so the last two show.
+        assertEquals(1, TileMath.fitFirst(listOf(half, half, half), 2, 0, 1000, 10))
+        val shown = TileMath.scrolling(listOf(half, half, half), 1, area, 10)
+        assertEquals(setOf(1, 2), shown.keys)
+        assertEquals(Rect(0, 0, 495, 2000), shown[1])
+        // One column alone is centred.
+        assertEquals(Rect(252, 0, 747, 2000), TileMath.scrolling(listOf(half), 0, area, 10)[0])
     }
 }
 

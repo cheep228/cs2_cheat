@@ -226,6 +226,26 @@ class RecentsBridge(val recentsView: View) {
         for (t in taskIds) Rx.call(amw, "removeTask", t)
     }
 
+    /** Removes every recent task like the stock "Clear all" button (which then goes home). */
+    fun dismissAll(taskIds: List<Int>) {
+        val stock = generateSequence<Class<*>>(recentsView.javaClass) { it.superclass }
+            .flatMap { it.declaredMethods.asSequence() }
+            .firstOrNull { it.name == "dismissAllTasks" && it.parameterTypes.size <= 1 }
+        if (stock != null) {
+            try {
+                stock.isAccessible = true
+                if (stock.parameterTypes.isEmpty()) stock.invoke(recentsView) else stock.invoke(recentsView, null as Any?)
+                return
+            } catch (t: Throwable) {
+                // Fall back below.
+            }
+        }
+        if (Rx.tryCall(amw, "removeAllRecentTasks") == null) {
+            for (id in taskIds) Rx.call(amw, "removeTask", id)
+        }
+        goHome()
+    }
+
     /** Puts the launcher into its Recents state (the overlay then shows on top). */
     fun goToOverview() {
         val sm = stateManager() ?: return

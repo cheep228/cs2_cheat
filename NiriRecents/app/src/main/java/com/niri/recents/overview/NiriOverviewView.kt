@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -49,11 +50,17 @@ class OverviewStyle(s: NiriSettings, val density: Float, palette: Md3Palette? = 
     /** Workspace to the side of the screen. */
     val margin = 10f * density
 
+    /** Hyprland mode borrows Hyprland's look: rounding 10, gradient active border, grey inactive. */
+    private val hypr = s.hypr && !md3
+
     /** Window corners; workspaces get matching (concentric) ones. */
-    val corner = (if (md3) 16f else s.cornerDp.coerceIn(0f, 64f)) * density
+    val corner = (if (md3) 16f else if (hypr) 10f else s.cornerDp.coerceIn(0f, 64f)) * density
     val ring = s.ringWidthDp.coerceIn(0f, 16f) * density
-    val ringActive = if (md3) p.primary else s.ringActive
-    val ringInactive = if (md3) p.outlineVariant else s.ringInactive
+    val ringActive = if (md3) p.primary else if (hypr) HYPR_ACTIVE_A else s.ringActive
+    val ringInactive = if (md3) p.outlineVariant else if (hypr) HYPR_INACTIVE else s.ringInactive
+
+    /** Two colours the active ring blends across at 45°, like Hyprland's col.active_border. */
+    val ringGradient: IntArray? = if (hypr) intArrayOf(HYPR_ACTIVE_A, HYPR_ACTIVE_B) else null
     val backdrop = if (md3) p.surface else s.backdrop or 0xFF000000.toInt()
     val workspaceColor = if (md3) p.surfaceContainer else s.workspaceColor or 0xFF000000.toInt()
     val chip = p.surfaceContainerHigh
@@ -69,6 +76,12 @@ class OverviewStyle(s: NiriSettings, val density: Float, palette: Md3Palette? = 
     companion object {
         const val MIN_ZOOM = 0.2f
         const val MAX_ZOOM = 0.6f
+
+        // Hyprland's default config: col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg,
+        // col.inactive_border = rgba(595959aa).
+        const val HYPR_ACTIVE_A = 0xEE33CCFF.toInt()
+        const val HYPR_ACTIVE_B = 0xEE00FF99.toInt()
+        const val HYPR_INACTIVE = 0xAA595959.toInt()
     }
 }
 
@@ -114,6 +127,11 @@ class NiriOverviewView(context: Context) : View(context) {
 
         /** Where a tapped window ends up on screen, if not full screen (niri tiling mode). */
         fun launchBounds(column: OvColumn): RectF? = null
+
+        /** "Clear all" was tapped; every window is flying away. */
+        fun onDismissAll(columns: List<OvColumn>) {
+            columns.forEach { onDismiss(it) }
+        }
     }
 
     enum class Phase { IDLE, OPEN, LAUNCHING, CLOSING }
@@ -122,7 +140,7 @@ class NiriOverviewView(context: Context) : View(context) {
     private data class Insert(val ws: Int, val slot: Int) : Drop
     private data class NewWorkspace(val after: Int) : Drop
 
-    private enum class Mode { NONE, PENDING, STRIP, SPACES, DISMISS, DRAG, PINCH }
+    private enum class Mode { NONE, PENDING, STRIP, SPACES, DISMISS, DRAG, PINCH, CLEAR }
 
     var host: Host? = null
 
@@ -156,6 +174,16 @@ class NiriOverviewView(context: Context) : View(context) {
 
     var emptyText = "Нет недавних приложений"
     var newWorkspaceText = "Новый стол"
+    var clearAllText = "Очистить всё"
+
+    /** The "clear all" button under the workspaces. */
+    var showClearAll = true
+        set(value) {
+            field = value
+            invalidate()
+        }
+    private val clearRect = RectF()
+    private var clearing = false
 
     var phase = Phase.IDLE
         private set
@@ -269,7 +297,11 @@ class NiriOverviewView(context: Context) : View(context) {
     private val step get() = winW + style.gap
     private val edge get() = max(style.wsGap, style.margin)
     private val areaTop get() = insetTop + edge
-    private val areaH get() = max(1f, h - insetBottom - edge - areaTop)
+    private val hasWindows get() = workspaces.any { it.columns.isNotEmpty() }
+
+    /** Room kept free at the bottom for the "clear all" button. */
+    private val clearRoom get() = if (showClearAll && (hasWindows || clearing)) 56f * dp else 0f
+    private val areaH get() = max(1f, h - insetBottom - edge - clearRoom - areaTop)
 
     private fun rowH(ws: OvWorkspace) = emptyH + (fullH - emptyH) * ws.grow.value.coerceIn(0f, 1f)
     private fun targetH(ws: OvWorkspace) = if (ws.grow.target > 0.5f) fullH else emptyH
@@ -518,6 +550,11 @@ class NiriOverviewView(context: Context) : View(context) {
             moving = it.dy.step(dt) or moving
         }
         for (c in finished) finalizeRemove(c)
+        if (clearing && workspaces.none { ws -> ws.columns.any { it.dismissing } }) {
+            clearing = false
+            // Nobody closed the overview meanwhile (the preview): go "home" like the stock button.
+            if (phase == Phase.OPEN) host?.onHome()
+        }
         if (mode == Mode.DRAG) moving = autoScroll(dt) or moving
         return moving || finished.isNotEmpty()
     }
@@ -612,6 +649,62 @@ class NiriOverviewView(context: Context) : View(context) {
         drawDragged(c)
         if (dragCol == null && workspaces.all { it.columns.isEmpty() }) drawEmptyText(c)
         c.restoreToCount(save)
+        drawClearAll(c, alpha)
+    }
+
+    private fun clearVisible() = showClearAll && hasWindows && !clearing && dragCol == null
+
+    /** A pill under the workspaces, like the stock Recents' "Clear all". */
+    private fun drawClearAll(c: Canvas, sceneA: Float) {
+        if (!showClearAll || !(hasWindows || clearing)) return
+        val zoomed = if (zoomCol != null) zoomP.value.coerceIn(0f, 1f) else 0f
+        val a = sceneA * (1f - zoomed) * (if (clearing) 0.4f else 1f) * (if (dragCol != null) 0.3f else 1f)
+        if (a <= 0.01f) return
+        text.textSize = 14f * dp
+        text.textAlign = Paint.Align.CENTER
+        val tw = text.measureText(clearAllText)
+        val bh = 40f * dp
+        val bottom = h - insetBottom - 10f * dp
+        clearRect.set(w / 2f - tw / 2f - 22f * dp, bottom - bh, w / 2f + tw / 2f + 22f * dp, bottom)
+        // Workspaces scrolled under the button fade into the backdrop instead of poking out.
+        val scrimTop = clearRect.top - 36f * dp
+        fill.color = Color.WHITE
+        fill.alpha = (255 * a).roundToInt()
+        fill.shader = LinearGradient(
+            0f, scrimTop, 0f, clearRect.centerY(),
+            style.backdrop and 0x00FFFFFF, (style.backdrop and 0x00FFFFFF) or 0xE0000000.toInt(), Shader.TileMode.CLAMP,
+        )
+        c.drawRect(0f, scrimTop, w, h, fill)
+        fill.shader = null
+        fill.color = if (style.md3) style.chip else 0xE6262626.toInt()
+        fill.alpha = (Color.alpha(fill.color) * a).roundToInt()
+        c.drawRoundRect(clearRect, bh / 2f, bh / 2f, fill)
+        if (!style.md3) {
+            line.strokeWidth = 1f * dp
+            line.color = 0x33FFFFFF
+            line.alpha = (0x33 * a).roundToInt()
+            c.drawRoundRect(clearRect, bh / 2f, bh / 2f, line)
+            line.alpha = 255
+        }
+        text.color = if (style.md3) style.onChip else 0xFFF0F0F0.toInt()
+        text.alpha = (255 * a).roundToInt()
+        c.drawText(clearAllText, clearRect.centerX(), clearRect.centerY() - (text.descent() + text.ascent()) / 2f, text)
+    }
+
+    /** Every window flies up and away; the host removes the tasks. */
+    fun clearAll() {
+        if (phase != Phase.OPEN) return
+        val all = workspaces.flatMap { it.columns }
+        if (all.isEmpty()) return
+        cancelTouch()
+        performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        clearing = true
+        for ((k, col) in all.withIndex()) {
+            col.dismissing = true
+            col.dismissY.animateTo(-(col.base.bottom - vis.top + 40f * dp), -(2200f + 180f * k) * dp)
+        }
+        host?.onDismissAll(all)
+        invalidate()
     }
 
     private fun onScreen(r: RectF) = r.right > vis.left && r.left < vis.right && r.bottom > vis.top && r.top < vis.bottom
@@ -766,7 +859,14 @@ class NiriOverviewView(context: Context) : View(context) {
         val o = t / 2f - 1f
         ringRect.set(r)
         ringRect.inset(-o, -o)
+        val g = style.ringGradient
+        if (g != null && color == style.ringActive) {
+            line.color = Color.WHITE
+            line.alpha = (255 * a).roundToInt()
+            line.shader = LinearGradient(ringRect.left, ringRect.top, ringRect.right, ringRect.bottom, g[0], g[1], Shader.TileMode.CLAMP)
+        }
         c.drawRoundRect(ringRect, radius + o, radius + o, line)
+        line.shader = null
         line.alpha = 255
     }
 
@@ -911,6 +1011,10 @@ class NiriOverviewView(context: Context) : View(context) {
                     mode = Mode.NONE
                     return false
                 }
+                if (clearVisible() && clearRect.contains(e.x, e.y)) {
+                    mode = Mode.CLEAR
+                    return true
+                }
                 velocity?.recycle()
                 velocity = VelocityTracker.obtain().also { it.addMovement(e) }
                 downX = x
@@ -933,6 +1037,14 @@ class NiriOverviewView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_POINTER_UP -> if (mode == Mode.PINCH) endPinch()
             MotionEvent.ACTION_UP -> {
+                if (mode == Mode.CLEAR) {
+                    mode = Mode.NONE
+                    if (clearRect.contains(e.x, e.y)) {
+                        performClick()
+                        clearAll()
+                    }
+                    return true
+                }
                 velocity?.addMovement(e)
                 finishGesture(x, y, cancelled = false)
             }
@@ -1038,7 +1150,7 @@ class NiriOverviewView(context: Context) : View(context) {
                 it.dismissY.snapTo(if (d < 0f) d else d * 0.2f)
             }
             Mode.DRAG -> updateDrag(x, y)
-            Mode.NONE, Mode.PINCH -> Unit
+            Mode.NONE, Mode.PINCH, Mode.CLEAR -> Unit
         }
         invalidate()
     }
@@ -1056,7 +1168,7 @@ class NiriOverviewView(context: Context) : View(context) {
             Mode.DISMISS -> touchCol?.let { settleDismiss(it, vy, cancelled) }
             Mode.DRAG -> if (cancelled) cancelDrag() else dropDragged()
             Mode.PINCH -> endPinch()
-            Mode.NONE -> Unit
+            Mode.NONE, Mode.CLEAR -> Unit
         }
         mode = Mode.NONE
         stripWs = null

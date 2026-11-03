@@ -61,6 +61,7 @@ object SettingsStore {
             perWorkspace = p.getInt("perWs", d.perWorkspace),
             tiling = p.getBoolean("tiling", d.tiling),
             columnWidth = p.getFloat("colWidth", d.columnWidth),
+            hypr = p.getBoolean("hypr", d.hypr),
         )
     }
 
@@ -86,6 +87,7 @@ object SettingsStore {
             .putInt("perWs", s.perWorkspace)
             .putBoolean("tiling", s.tiling)
             .putFloat("colWidth", s.columnWidth)
+            .putBoolean("hypr", s.hypr)
             .apply()
     }
 }

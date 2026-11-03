@@ -19,23 +19,30 @@ import com.niri.recents.shared.TilerProtocol
 import kotlin.math.roundToInt
 
 /**
- * niri's desktop: the wallpaper behind the tiled app windows, with a control bar at the bottom.
- * The launcher lays the windows out over it; this activity only shows the bar and passes the
- * user's commands back to the launcher.
+ * The live-window desktop: the wallpaper behind the tiled app windows, their borders, and a bar
+ * (niri: a control bar at the bottom; Hyprland: a Waybar at the top). The launcher lays the
+ * windows out over it; this activity only draws and passes the user's commands back.
  */
 class NiriDesktopActivity : Activity() {
 
     private lateinit var root: FrameLayout
+    private lateinit var borders: WindowBordersView
     private lateinit var bar: NiriBarView
+    private lateinit var waybar: WaybarView
     private lateinit var hint: TextView
     private val onState: () -> Unit = { render() }
     private var lastHello: Rect? = null
+    private var hypr = false
+
+    /** False until the launcher got SHOWN (on a cold start its channel arrives a bit later). */
+    private var shownSent = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setDecorFitsSystemWindows(false)
         val d = resources.displayMetrics.density
         root = FrameLayout(this)
+        borders = WindowBordersView(this)
         hint = TextView(this).apply {
             setTextColor(Color.argb(220, 255, 255, 255))
             textSize = 15f
@@ -45,12 +52,19 @@ class NiriDesktopActivity : Activity() {
             setPadding(p, p, p, p)
         }
         bar = NiriBarView(this)
-        root.addView(hint, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
-        root.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        waybar = WaybarView(this)
+        val match = ViewGroup.LayoutParams.MATCH_PARENT
+        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+        root.addView(borders, FrameLayout.LayoutParams(match, match))
+        root.addView(hint, FrameLayout.LayoutParams(match, wrap, Gravity.CENTER))
+        root.addView(bar, FrameLayout.LayoutParams(match, wrap, Gravity.BOTTOM))
+        root.addView(waybar, FrameLayout.LayoutParams(match, wrap, Gravity.TOP))
         setContentView(root)
         root.setOnApplyWindowInsetsListener { _, insets ->
             bar.bottomInset = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            waybar.topInset = insets.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()).top
             bar.requestLayout()
+            waybar.requestLayout()
             root.post { sendHello() }
             insets
         }
@@ -70,7 +84,9 @@ class NiriDesktopActivity : Activity() {
     override fun onStart() {
         super.onStart()
         val s = SettingsStore.load(this)
+        setMode(s.hypr)
         bar.setLook(s.md3, if (s.md3) Md3Palette.system(this) else null, s.ringActive)
+        borders.setRingColor(if (s.md3) Md3Palette.system(this).primary else s.ringActive)
         TilerLink.listen(onState)
         shownSent = TilerLink.send(TilerProtocol.SHOWN)
         lastHello = null
@@ -78,16 +94,22 @@ class NiriDesktopActivity : Activity() {
         render()
     }
 
-    /** False until the launcher got SHOWN (on a cold start its channel arrives a bit later). */
-    private var shownSent = false
-
     override fun onStop() {
         TilerLink.send(TilerProtocol.HIDDEN)
         TilerLink.unlisten(onState)
         super.onStop()
     }
 
-    /** Tells the launcher where windows may go: everything but the status bar and our bar. */
+    /** niri: control bar at the bottom. Hyprland: Waybar at the top. */
+    private fun setMode(hyprland: Boolean) {
+        if (hyprland == hypr && bar.visibility != waybar.visibility) return
+        hypr = hyprland
+        bar.visibility = if (hypr) View.GONE else View.VISIBLE
+        waybar.visibility = if (hypr) View.VISIBLE else View.GONE
+        lastHello = null
+    }
+
+    /** Tells the launcher where windows may go: everything but the system bars and our bar. */
     private fun sendHello() {
         val v = window.decorView
         if (v.width == 0 || v.height == 0) return
@@ -96,26 +118,40 @@ class NiriDesktopActivity : Activity() {
         val d = resources.displayMetrics.density
         val loc = IntArray(2)
         v.getLocationOnScreen(loc)
-        val edge = (6f * d).roundToInt()
-        val r = Rect(
-            loc[0] + edge,
-            loc[1] + i.top + edge,
-            loc[0] + v.width - edge,
-            loc[1] + v.height - i.bottom - (TilerProtocol.BAR_DP * d).roundToInt(),
-        )
+        val r = if (hypr) {
+            // gaps_out around the windows, Waybar above them.
+            val out = (8f * d).roundToInt()
+            Rect(
+                loc[0] + out,
+                loc[1] + i.top + (TilerProtocol.WAYBAR_DP * d).roundToInt(),
+                loc[0] + v.width - out,
+                loc[1] + v.height - i.bottom - out,
+            )
+        } else {
+            val edge = (6f * d).roundToInt()
+            Rect(
+                loc[0] + edge,
+                loc[1] + i.top + edge,
+                loc[0] + v.width - edge,
+                loc[1] + v.height - i.bottom - (TilerProtocol.BAR_DP * d).roundToInt(),
+            )
+        }
         if (r == lastHello) return
         if (TilerLink.send(TilerProtocol.HELLO, r.left, r.top, r.right, r.bottom)) lastHello = r
     }
 
     private fun render() {
+        val s = TilerLink.state
+        s?.getString(TilerProtocol.S_MODE)?.let { setMode(it == TilerProtocol.MODE_HYPR) }
         // The first state also brings the launcher's channel: catch up on what couldn't be sent.
         if (!shownSent && TilerLink.binder != null) shownSent = TilerLink.send(TilerProtocol.SHOWN)
         sendHello()
-        val s = TilerLink.state
         bar.setState(s)
+        waybar.setState(s)
+        borders.setState(s)
         val text = when {
             TilerLink.binder == null ->
-                "Режим niri ещё не подключён.\nОткройте «Недавние» и нажмите на окно."
+                "Живые окна ещё не подключены.\nОткройте «Недавние» и нажмите на окно."
             s?.getString(TilerProtocol.S_MESSAGE) != null -> s.getString(TilerProtocol.S_MESSAGE)
             else -> null
         }

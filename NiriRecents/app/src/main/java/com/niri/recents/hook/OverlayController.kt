@@ -263,7 +263,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
         }
         showRetries = 0
         val settings = Remote.cached ?: NiriSettings()
-        if (!settings.tiling) NiriTiler.release()
+        if (!settings.liveWindows) NiriTiler.release()
         if (!settings.enabled) return
         if (settings.resetToken != store.resetToken) {
             store.clear()
@@ -482,7 +482,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
         main.postDelayed(launchTimeout, 1_500)
         val settings = Remote.cached ?: NiriSettings()
         val v = view
-        if (settings.tiling && v != null) {
+        if (settings.liveWindows && v != null) {
             val spaces = v.workspacesSnapshot()
             val ws = spaces.firstOrNull { column in it.columns }
             if (ws != null && NiriTiler.enter(context, spaces, ws.id, column.key, settings)) {
@@ -501,7 +501,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
     /** In niri mode the window zooms to its column instead of the whole screen. */
     override fun launchBounds(column: OvColumn): RectF? {
         val settings = Remote.cached ?: return null
-        if (!settings.tiling) return null
+        if (!settings.liveWindows) return null
         val v = view ?: return null
         val spaces = v.workspacesSnapshot()
         val ws = spaces.firstOrNull { column in it.columns } ?: return null
@@ -509,6 +509,13 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
     }
 
     override fun onZoomChanged(zoom: Float) = Remote.setZoom(context, zoom)
+
+    /** "Clear all": the stock Recents removes every task and goes home; we fade out with it. */
+    override fun onDismissAll(columns: List<OvColumn>) {
+        bridge.dismissAll(columns.flatMap { it.taskIds.toList() })
+        main.removeCallbacks(forceRemove)
+        main.postDelayed(forceRemove, 1_200)
+    }
 
     /** Brings up Recents (used by the tiling desktop's overview button). */
     fun openOverview() {

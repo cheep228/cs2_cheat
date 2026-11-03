@@ -228,7 +228,7 @@ fun SettingsScreen(s: NiriSettings, update: (NiriSettings) -> Unit, tick: Int) {
             }
             item { PreviewCard(s, wpBitmap, update) }
             item { LookCard(s, wpStatus, update) }
-            item { GesturesCard(s.tiling) }
+            item { GesturesCard(s.liveWindows) }
             item {
                 DiagCard(
                     diag,
@@ -419,7 +419,7 @@ private fun LookCard(s: NiriSettings, wpStatus: String?, update: (NiriSettings) 
                     update(
                         NiriSettings(
                             enabled = s.enabled, resetToken = s.resetToken, md3 = s.md3, tiling = s.tiling,
-                            perWorkspace = s.perWorkspace, columnWidth = s.columnWidth,
+                            perWorkspace = s.perWorkspace, columnWidth = s.columnWidth, hypr = s.hypr,
                         ),
                     )
                 }) {
@@ -456,8 +456,15 @@ private fun ModesCard(
                 "Нажали на окно в обзоре — его стол открывается живыми окнами колонками рядом, " +
                     "ими можно пользоваться. Снизу панель: колонки, ширина, закрыть; свайп по панели " +
                     "вверх/вниз — другой стол; «Назад» — в обзор.",
-            ) { update(s.copy(tiling = it)) }
-            if (s.tiling) {
+            ) { update(s.copy(tiling = it, hypr = if (it) false else s.hypr)) }
+            CheckRow(
+                s.hypr,
+                "Как в Hyprland: живые окна (эксперимент)",
+                "Окна стола сами делят экран (dwindle): одно — весь экран, два — пополам, дальше " +
+                    "спиралью. Рамки с градиентом, отступы, сверху Waybar: столы 1-2-3, окно в фокусе, " +
+                    "часы, батарея. Нажмите на окно в Waybar — меню (togglesplit, поменять, на другой стол).",
+            ) { update(s.copy(hypr = it, tiling = if (it) false else s.tiling)) }
+            if (s.liveWindows) {
                 Text(
                     if (freeform) "Плавающие окна Android: включены" else "Плавающие окна Android выключены, без них режим не работает",
                     style = MaterialTheme.typography.bodySmall,
@@ -470,6 +477,8 @@ private fun ModesCard(
                         OutlinedButton(onClick = onReboot) { Text("Перезагрузить") }
                     }
                 }
+            }
+            if (s.tiling) {
                 Text("Ширина новой колонки", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("⅓" to 1f / 3f, "½" to 0.5f, "⅔" to 2f / 3f, "1" to 1f).forEach { (label, w) ->
@@ -514,6 +523,7 @@ private fun GesturesCard(tiling: Boolean) {
                 "Щипок двумя пальцами" to "окна крупнее или мельче (запоминается)",
                 "Смахнуть окно вверх" to "закрыть приложение",
                 "Зажать окно и перетащить" to "на другой стол, между столами — новый стол",
+                "«Очистить всё» внизу" to "закрыть все приложения",
                 "Нажать на пустое место" to "на главный экран",
                 "Назад / жест домой" to "как обычно",
             )

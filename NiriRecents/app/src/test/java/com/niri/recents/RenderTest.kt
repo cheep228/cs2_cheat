@@ -142,9 +142,10 @@ class RenderTest {
     @Test
     fun oneLongWorkspace() {
         val out = render("niri-one-workspace.png", userLook, spaces(12), 0, "k11")
-        // Short content is centred: backdrop above the first workspace and below the last.
+        // Short content is centred: backdrop above the first workspace and below the last
+        // (beside the "clear all" button).
         assertEquals(0xFF000000.toInt(), out.getPixel(w / 2, (60 * dm.density).toInt()))
-        assertEquals(0xFF000000.toInt(), out.getPixel(w / 2, h - (40 * dm.density).toInt()))
+        assertEquals(0xFF000000.toInt(), out.getPixel(4, h - (40 * dm.density).toInt()))
     }
 
     @Test
@@ -265,6 +266,90 @@ class RenderTest {
         File(dir, "niri-tiling.png").outputStream().use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
+    /** Hyprland mode: Waybar on top, three windows in dwindle, gradient border on the focused one. */
+    @Test
+    fun hyprlandDesktopMock() {
+        val d = dm.density
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        c.drawBitmap(wallpaper(), null, android.graphics.Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
+        val statusBar = (36 * d).toInt()
+        val nav = (24 * d).toInt()
+        val outer = (8 * d).toInt()
+        val area = android.graphics.Rect(outer, statusBar + (TilerProtocol.WAYBAR_DP * d).toInt(), w - outer, h - nav - outer)
+        val rects = com.niri.recents.overview.TileMath.dwindle(3, area, (8 * d).toInt())
+        val state = android.os.Bundle().apply {
+            putString(TilerProtocol.S_MODE, TilerProtocol.MODE_HYPR)
+            putStringArray(TilerProtocol.S_LABELS, arrayOf("Telegram", "YouTube", "Chrome"))
+            putStringArray(TilerProtocol.S_PACKAGES, arrayOf("", "", ""))
+            putFloatArray(TilerProtocol.S_WIDTHS, floatArrayOf(1f, 1f, 1f))
+            putInt(TilerProtocol.S_FOCUS, 1)
+            putInt(TilerProtocol.S_WS, 0)
+            putInt(TilerProtocol.S_WS_COUNT, 4)
+            putIntArray(TilerProtocol.S_RECTS, rects.flatMap { listOf(it.left, it.top, it.right, it.bottom) }.toIntArray())
+            putInt(TilerProtocol.S_RECT_FOCUS, 1)
+        }
+        val borders = com.niri.recents.ui.WindowBordersView(ctx)
+        borders.setState(state)
+        borders.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+        borders.layout(0, 0, w, h)
+        borders.draw(c)
+        val apps = DemoData.syntheticApps()
+        for ((k, r) in rects.withIndex()) {
+            val win = DemoData.mockWindow(apps[k], r.width(), r.height(), d, k)
+            val path = android.graphics.Path().apply { addRoundRect(android.graphics.RectF(r), 10 * d, 10 * d, android.graphics.Path.Direction.CW) }
+            c.save()
+            c.clipPath(path)
+            c.drawBitmap(win, r.left.toFloat(), r.top.toFloat(), null)
+            c.restore()
+        }
+        val bar = com.niri.recents.ui.WaybarView(ctx)
+        bar.topInset = statusBar
+        bar.setState(state)
+        bar.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        bar.layout(0, 0, w, bar.measuredHeight)
+        bar.draw(c)
+        val dir = File("build/preview").apply { mkdirs() }
+        File(dir, "niri-hyprland.png").outputStream().use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    @Test
+    fun clearAllRemovesEveryWindow() {
+        val v = view(userLook)
+        var cleared = 0
+        var home = false
+        v.host = object : NiriOverviewView.Host {
+            override fun onLaunch(column: OvColumn) = Unit
+            override fun onDismiss(column: OvColumn) = Unit
+            override fun onHome() {
+                home = true
+            }
+            override fun onDismissAll(columns: List<OvColumn>) {
+                cleared = columns.size
+            }
+        }
+        v.setData(spaces(2, 3), 1, "k3")
+        v.open(null)
+        v.snapAnimations()
+        shot(v, "niri-clear-all.png")
+        val t0 = SystemClock.uptimeMillis()
+        val y = h - 24f * dm.density - 30f * dm.density
+        v.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, w / 2f, y, 0))
+        v.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 50, MotionEvent.ACTION_UP, w / 2f, y, 0))
+        assertEquals(5, cleared)
+        v.snapAnimations()
+        shot(v, "niri-cleared.png")
+        v.snapAnimations()
+        shot(v, "niri-cleared.png")
+        assertTrue(v.workspacesSnapshot().isEmpty())
+        assertTrue(home)
+    }
+
+    @Test
+    fun hyprlandOverview() {
+        render("niri-hypr-overview.png", userLook.copy(hypr = true, backdrop = 0xFF1E1E2E.toInt()), spaces(3, 2), 0, "k1")
+    }
+
     @Test
     fun empty() {
         render("niri-empty.png", NiriSettings(), emptyList(), 0, null)
@@ -288,6 +373,7 @@ class RenderTest {
         activity.setContentView(v, ViewGroup.LayoutParams(w, h))
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(w, v.width)
+        v.showClearAll = false // keeps the geometry the touch coordinates below were picked for
         v.setData(spaces(2, 3), 1, "k3")
         v.open(null)
         v.snapAnimations()

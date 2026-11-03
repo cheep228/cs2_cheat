@@ -35,7 +35,12 @@ data class NiriSettings(
     val tiling: Boolean = false,
     /** Width of a new column in tiling mode, as a fraction of the screen. */
     val columnWidth: Float = 0.5f,
+    /** Tapping a window opens its workspace as live windows tiled like Hyprland (dwindle). */
+    val hypr: Boolean = false,
 ) {
+    /** Some live-window mode is on. */
+    val liveWindows get() = tiling || hypr
+
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(K_ENABLED, enabled)
         putFloat(K_ZOOM, zoom)
@@ -56,6 +61,7 @@ data class NiriSettings(
         putInt(K_PER_WS, perWorkspace)
         putBoolean(K_TILING, tiling)
         putFloat(K_COL_WIDTH, columnWidth)
+        putBoolean(K_HYPR, hypr)
     }
 
     companion object {
@@ -78,6 +84,7 @@ data class NiriSettings(
         private const val K_PER_WS = "perWs"
         private const val K_TILING = "tiling"
         private const val K_COL_WIDTH = "colWidth"
+        private const val K_HYPR = "hypr"
 
         fun fromBundle(b: Bundle?): NiriSettings {
             val d = NiriSettings()
@@ -102,6 +109,7 @@ data class NiriSettings(
                 perWorkspace = b.getInt(K_PER_WS, d.perWorkspace),
                 tiling = b.getBoolean(K_TILING, d.tiling),
                 columnWidth = b.getFloat(K_COL_WIDTH, d.columnWidth),
+                hypr = b.getBoolean(K_HYPR, d.hypr),
             )
         }
     }
@@ -147,6 +155,8 @@ object TilerProtocol {
     const val FULLSCREEN = 10 // open the focused app normally, full screen
     const val HIDDEN = 11 // the desktop went out of sight
     const val SHOWN = 12 // the desktop is back
+    const val WORKSPACE_TO = 13 // int index: go to that workspace (Waybar buttons)
+    const val TOGGLE_SPLIT = 14 // Hyprland togglesplit on the focused window
 
     // State keys (launcher -> app).
     const val S_LABELS = "labels"
@@ -159,6 +169,21 @@ object TilerProtocol {
     const val S_WS_COUNT = "wsCount"
     const val S_MESSAGE = "message"
     const val S_ACTIVE = "active"
+
+    /** "niri" or "hypr". */
+    const val S_MODE = "mode"
+
+    /** Screen bounds of the windows on screen, as left, top, right, bottom quadruples. */
+    const val S_RECTS = "rects"
+
+    /** Which of [S_RECTS] is the focused window (-1: none). */
+    const val S_RECT_FOCUS = "rectFocus"
+
+    const val MODE_NIRI = "niri"
+    const val MODE_HYPR = "hypr"
+
+    /** Waybar at the top of the Hyprland desktop, margins included (dp). */
+    const val WAYBAR_DP = 46
 
     /** Column width presets, as in niri's preset-column-widths. */
     val WIDTHS = floatArrayOf(1f / 3f, 0.5f, 2f / 3f, 1f)

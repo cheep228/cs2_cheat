@@ -17,6 +17,7 @@ import android.os.Process
 import android.view.WindowInsets
 import android.view.WindowManager
 import com.niri.recents.overview.OvWorkspace
+import com.niri.recents.overview.TileMath
 import com.niri.recents.shared.NiriSettings
 import com.niri.recents.shared.SettingsContract
 import com.niri.recents.shared.TilerProtocol
@@ -24,14 +25,14 @@ import java.lang.reflect.Proxy
 import kotlin.math.roundToInt
 
 /**
- * niri's scrolling layout for real app windows. Runs inside the launcher.
+ * Live app windows, tiled the niri way (a scrolling strip of columns) or the Hyprland way
+ * (dwindle: the windows split the screen between them). Runs inside the launcher.
  *
  * Entering a workspace puts our desktop (an activity of the Niri Recents app that shows the
- * wallpaper and a control bar) full screen, then lays the workspace's apps over it as freeform
- * windows: columns side by side, as many as fit on screen, the rest pushed behind the desktop.
- * The bar scrolls, focuses, resizes, moves and closes columns through [binder].
- * When the desktop has been out of sight for a while, the windows go back to being normal
- * full-screen apps, so the rest of Android behaves as usual.
+ * wallpaper, window borders and a bar) full screen, then lays the workspace's apps over it as
+ * freeform windows; whatever doesn't show is pushed behind the desktop. The desktop's bar
+ * sends commands through [binder]. When the desktop has been out of sight for a while, the
+ * windows go back to being normal full-screen apps, so the rest of Android behaves as usual.
  */
 // Holds the launcher's application context only, which lives as long as the process.
 @SuppressLint("StaticFieldLeak")
@@ -56,7 +57,9 @@ internal object NiriTiler {
     // Model; touched only on the background thread after enter().
     private val spaces = ArrayList<Space>()
     private var current = 0
+    private var hypr = false
     private val widths = HashMap<String, Float>()
+    private val flips = HashSet<String>()
     private var defaultWidth = 0.5f
     private val area = Rect()
     private var gap = 16
@@ -64,6 +67,8 @@ internal object NiriTiler {
     private var message: String? = null
     private val shown = LinkedHashSet<Int>()
     private val tiled = HashSet<Int>()
+    private var onScreen = emptyList<Rect>()
+    private var onScreenFocus = -1
     private var listening = false
     private var reported = false
 
@@ -105,7 +110,7 @@ internal object NiriTiler {
         }
     }
 
-    /** niri mode was switched off: every window we made goes back to full screen. */
+    /** The live-window modes were switched off: every window we made goes back to full screen. */
     fun release() {
         bg.post {
             safely {
@@ -129,8 +134,8 @@ internal object NiriTiler {
             val turnedOn = Wm.enableFreeform(app)
             Remote.report(
                 app,
-                if (turnedOn) "Режим niri: включил плавающие окна в системе. Перезагрузите телефон, тогда окна встанут колонками."
-                else "Режим niri: плавающие окна выключены и включить не вышло (${Wm.lastError}). Включите «Плавающие окна» в настройках разработчика и перезагрузите.",
+                if (turnedOn) "Живые окна: включил плавающие окна в системе. Перезагрузите телефон, тогда окна встанут на места."
+                else "Живые окна: плавающие окна выключены и включить не вышло (${Wm.lastError}). Включите «Плавающие окна» в настройках разработчика и перезагрузите.",
             )
             return false
         }
@@ -152,6 +157,8 @@ internal object NiriTiler {
                 }
                 current = spaces.indexOfFirst { it.id == wsId }.coerceAtLeast(0)
                 spaces.getOrNull(current)?.let { sp -> sp.focus = sp.cols.indexOfFirst { it.key == focusKey }.coerceAtLeast(0) }
+                if (hypr != s.hypr) area.setEmpty() // the desktop's bar moves; wait for its HELLO
+                hypr = s.hypr
                 defaultWidth = s.columnWidth.coerceIn(0.2f, 1f)
                 widths.clear()
                 store?.widths()?.let { widths.putAll(it) }
@@ -167,16 +174,17 @@ internal object NiriTiler {
         return true
     }
 
-    /** Where the chosen column will be, for the overview's zoom-in. */
+    /** Where the chosen window will be, for the overview's zoom-in. */
     fun previewBounds(snapshot: List<OvWorkspace>, wsId: Int, focusKey: String, s: NiriSettings): Rect? {
         val app = context ?: return null
         val ws = snapshot.firstOrNull { it.id == wsId } ?: return null
-        val a = if (area.isEmpty) guessedArea(app) else Rect(area)
+        val a = if (area.isEmpty || hypr != s.hypr) guessedArea(app, s.hypr) else Rect(area)
+        val focus = ws.columns.indexOfFirst { it.key == focusKey }.coerceAtLeast(0)
+        if (s.hypr) return TileMath.dwindle(ws.columns.size, a, gap) { ws.columns[it].key in flips }.getOrNull(focus)
         val saved = store?.widths().orEmpty()
         val px = ws.columns.map { pxFor(saved[it.key] ?: s.columnWidth, a) }
-        val focus = ws.columns.indexOfFirst { it.key == focusKey }.coerceAtLeast(0)
-        val first = fitFirst(px, focus, 0, a.width())
-        return rectsFor(px, first, a)[focus]
+        val first = TileMath.fitFirst(px, focus, 0, a.width(), gap)
+        return TileMath.scrolling(px, first, a, gap)[focus]
     }
 
     private fun startDesktop(app: Context) {
@@ -188,7 +196,7 @@ internal object NiriTiler {
                 opts.toBundle(),
             )
         } catch (t: Throwable) {
-            Remote.report(app, "Режим niri: не открылся рабочий стол: $t")
+            Remote.report(app, "Живые окна: не открылся рабочий стол: $t")
         }
     }
 
@@ -198,42 +206,19 @@ internal object NiriTiler {
 
     private fun widthOf(c: Col) = (widths[c.key] ?: defaultWidth).coerceIn(0.2f, 1f)
 
-    /** Last column that fits on screen when [first] is the first one. */
-    private fun lastFrom(px: List<Int>, first: Int, width: Int): Int {
-        var used = 0
-        var last = first
-        for (i in first until px.size) {
-            val need = px[i] + if (i > first) gap else 0
-            if (i > first && used + need > width) break
-            used += need
-            last = i
-        }
-        return last
-    }
+    private fun pxList(sp: Space) = sp.cols.map { pxFor(widthOf(it), area) }
 
-    /** niri never centres the focus: the view moves just enough to show it, and never past the end. */
-    private fun fitFirst(px: List<Int>, focus: Int, first: Int, width: Int): Int {
-        if (px.isEmpty()) return 0
-        var f = first.coerceIn(0, px.lastIndex)
-        if (focus < f) f = focus
-        while (f < focus && lastFrom(px, f, width) < focus) f++
-        var maxFirst = px.lastIndex
-        while (maxFirst > 0 && lastFrom(px, maxFirst - 1, width) == px.lastIndex) maxFirst--
-        return minOf(f, maxFirst)
-    }
-
-    /** Screen bounds of the visible columns, by column index. A short row is centred. */
-    private fun rectsFor(px: List<Int>, first: Int, a: Rect): Map<Int, Rect> {
-        if (px.isEmpty()) return emptyMap()
-        val last = lastFrom(px, first, a.width())
-        val total = (first..last).sumOf { px[it] } + (last - first) * gap
-        var x = a.left + if (first == 0 && last == px.lastIndex) maxOf(0, (a.width() - total) / 2) else 0
-        val out = LinkedHashMap<Int, Rect>()
-        for (i in first..last) {
-            out[i] = Rect(x, a.top, x + px[i], a.bottom)
-            x += px[i] + gap
+    /** Bounds of the columns on screen in [sp], by column index. */
+    private fun columnRects(sp: Space): Map<Int, Rect> {
+        if (sp.cols.isEmpty()) return emptyMap()
+        sp.focus = sp.focus.coerceIn(0, sp.cols.lastIndex)
+        if (hypr) {
+            return TileMath.dwindle(sp.cols.size, area, gap) { sp.cols[it].key in flips }
+                .withIndex().associate { it.index to it.value }
         }
-        return out
+        val px = pxList(sp)
+        sp.first = TileMath.fitFirst(px, sp.focus, sp.first, area.width(), gap)
+        return TileMath.scrolling(px, sp.first, area, gap)
     }
 
     private fun applyLayout() {
@@ -244,20 +229,13 @@ internal object NiriTiler {
         val bounds = LinkedHashMap<Int, Rect>() // task -> window, bottom to top
         var focusTask = -1
         if (sp != null && sp.cols.isNotEmpty()) {
-            val px = sp.cols.map { pxFor(widthOf(it), area) }
-            sp.focus = sp.focus.coerceIn(0, sp.cols.lastIndex)
-            sp.first = fitFirst(px, sp.focus, sp.first, area.width())
-            val rects = rectsFor(px, sp.first, area)
+            val rects = columnRects(sp)
             val order = rects.keys.filter { it != sp.focus } + listOfNotNull(sp.focus.takeIf { it in rects })
             for (i in order) {
                 val col = sp.cols[i]
-                val r = rects.getValue(i)
-                // A split-screen pair shares its column, one above the other.
-                val n = col.taskIds.size
-                val each = (r.height() - gap * (n - 1)) / maxOf(1, n)
-                for ((k, id) in col.taskIds.withIndex()) {
-                    val top = r.top + k * (each + gap)
-                    bounds[id] = Rect(r.left, top, r.right, top + each)
+                // A split-screen pair shares its place, one above the other.
+                for ((k, r) in TileMath.stack(rects.getValue(i), col.taskIds.size, gap).withIndex()) {
+                    bounds[col.taskIds[k]] = r
                 }
             }
             focusTask = sp.cols[sp.focus].taskIds.last()
@@ -291,20 +269,22 @@ internal object NiriTiler {
                 Wm.startFromRecents(id, Wm.FREEFORM, r)
                 Wm.resizeTask(id, r)
             }
-            Remote.report(app, "Режим niri: пакетная раскладка не прошла ($why), раскладываю по одному окну")
+            Remote.report(app, "Живые окна: пакетная раскладка не прошла ($why), раскладываю по одному окну")
         }
         if (focusTask >= 0) Wm.setFocusedTask(focusTask)
         shown.clear()
         shown.addAll(bounds.keys)
         tiled.addAll(bounds.keys)
         store?.saveTiledTasks(tiled)
+        onScreen = bounds.values.map { Rect(it) }
+        onScreenFocus = bounds.keys.indexOf(focusTask)
         message = if (sp == null || sp.cols.isEmpty()) "На этом столе нет окон" else null
         publish()
         if (!reported) {
             reported = true
             Remote.report(
                 app,
-                "Режим niri: окон на экране ${bounds.size}, область $area, " +
+                "Живые окна (${if (hypr) "Hyprland" else "niri"}): на экране ${bounds.size}, область $area, " +
                     "задач запущено ${tasks.size}, последняя ошибка: ${Wm.lastError ?: "нет"}",
             )
         }
@@ -334,24 +314,37 @@ internal object NiriTiler {
             shown.clear()
             store?.saveTiledTasks(emptySet())
         } else if (app != null) {
-            Remote.report(app, "Режим niri: не вернул окна в полный экран: ${Wm.lastError}")
+            Remote.report(app, "Живые окна: не вернул окна в полный экран: ${Wm.lastError}")
         }
     }
 
     private fun guessArea(app: Context) {
-        area.set(guessedArea(app))
+        area.set(guessedArea(app, hypr))
     }
 
-    /** Screen minus status bar, navigation and the desktop's control bar. */
-    private fun guessedArea(app: Context): Rect {
+    /** Screen minus status bar, navigation and the desktop's bar (Waybar on top for Hyprland). */
+    private fun guessedArea(app: Context, hyprland: Boolean): Rect {
         val d = app.resources.displayMetrics.density
         val wm = app.getSystemService(WindowManager::class.java)
         val m = wm.currentWindowMetrics
         val b = m.bounds
         val i = m.windowInsets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-        val bar = (TilerProtocol.BAR_DP * d).roundToInt()
-        val edge = (6f * d).roundToInt()
-        return Rect(b.left + edge, b.top + i.top + edge, b.right - edge, b.bottom - i.bottom - bar - edge)
+        val edge = (if (hyprland) 8f else 6f) * d
+        return if (hyprland) {
+            Rect(
+                b.left + edge.roundToInt(),
+                b.top + i.top + (TilerProtocol.WAYBAR_DP * d).roundToInt(),
+                b.right - edge.roundToInt(),
+                b.bottom - i.bottom - edge.roundToInt(),
+            )
+        } else {
+            Rect(
+                b.left + edge.roundToInt(),
+                b.top + i.top + edge.roundToInt(),
+                b.right - edge.roundToInt(),
+                b.bottom - i.bottom - (TilerProtocol.BAR_DP * d).roundToInt(),
+            )
+        }
     }
 
     // ---------------------------------------------------------------- commands
@@ -385,18 +378,26 @@ internal object NiriTiler {
                 applyLayout()
             }
             TilerProtocol.SCROLL -> sp?.let {
-                if (it.cols.isEmpty()) return
-                val px = it.cols.map { c -> pxFor(widthOf(c), area) }
+                if (it.cols.isEmpty() || hypr) return
+                val px = pxList(it)
                 it.first = a[0].coerceIn(0, it.cols.lastIndex)
-                val last = lastFrom(px, it.first, area.width())
+                val last = TileMath.lastFrom(px, it.first, area.width(), gap)
                 if (it.focus < it.first) it.focus = it.first
                 if (it.focus > last) it.focus = last
                 applyLayout()
             }
             TilerProtocol.WIDTH -> sp?.cols?.getOrNull(sp.focus)?.let { c ->
-                val now = widthOf(c)
-                widths[c.key] = TilerProtocol.WIDTHS.firstOrNull { it > now + 0.01f } ?: TilerProtocol.WIDTHS[0]
-                store?.saveWidths(widths)
+                if (hypr) {
+                    toggleSplit(c)
+                } else {
+                    val now = widthOf(c)
+                    widths[c.key] = TilerProtocol.WIDTHS.firstOrNull { it > now + 0.01f } ?: TilerProtocol.WIDTHS[0]
+                    store?.saveWidths(widths)
+                }
+                applyLayout()
+            }
+            TilerProtocol.TOGGLE_SPLIT -> sp?.cols?.getOrNull(sp.focus)?.let { c ->
+                toggleSplit(c)
                 applyLayout()
             }
             TilerProtocol.CLOSE -> sp?.cols?.getOrNull(sp.focus)?.let { c ->
@@ -428,14 +429,8 @@ internal object NiriTiler {
                 saveLayout()
                 applyLayout()
             }
-            TilerProtocol.WORKSPACE -> {
-                val next = (current + a[0]).coerceIn(0, maxOf(0, spaces.lastIndex))
-                if (next != current) {
-                    current = next
-                    saveLayout()
-                    applyLayout()
-                }
-            }
+            TilerProtocol.WORKSPACE -> goTo(current + a[0])
+            TilerProtocol.WORKSPACE_TO -> goTo(a[0])
             TilerProtocol.OVERVIEW -> main.post { openOverview() }
             TilerProtocol.FULLSCREEN -> sp?.cols?.getOrNull(sp.focus)?.let { c ->
                 tiled.removeAll(c.taskIds.toSet())
@@ -443,6 +438,19 @@ internal object NiriTiler {
                 Wm.startFromRecents(c.taskIds.first(), Wm.FULLSCREEN, null)
             }
         }
+    }
+
+    private fun goTo(index: Int) {
+        val next = index.coerceIn(0, maxOf(0, spaces.lastIndex))
+        if (next != current) {
+            current = next
+            saveLayout()
+            applyLayout()
+        }
+    }
+
+    private fun toggleSplit(c: Col) {
+        if (!flips.remove(c.key)) flips.add(c.key)
     }
 
     private fun removeTasks(ids: Set<Int>) {
@@ -479,7 +487,7 @@ internal object NiriTiler {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         } catch (t: Throwable) {
-            Remote.report(app, "Режим niri: не открылся лаунчер: $t")
+            Remote.report(app, "Живые окна: не открылся лаунчер: $t")
             return
         }
         main.postDelayed({ Controllers.any()?.openOverview() }, 280)
@@ -491,17 +499,24 @@ internal object NiriTiler {
         val sp = spaces.getOrNull(current)
         val cols = sp?.cols.orEmpty()
         val b = Bundle()
+        b.putString(TilerProtocol.S_MODE, if (hypr) TilerProtocol.MODE_HYPR else TilerProtocol.MODE_NIRI)
         b.putStringArray(TilerProtocol.S_LABELS, cols.map { it.label }.toTypedArray())
         b.putStringArray(TilerProtocol.S_PACKAGES, cols.map { it.pkg ?: "" }.toTypedArray())
         b.putFloatArray(TilerProtocol.S_WIDTHS, cols.map { widthOf(it) }.toFloatArray())
         b.putInt(TilerProtocol.S_FOCUS, sp?.focus ?: 0)
-        b.putInt(TilerProtocol.S_FIRST, sp?.first ?: 0)
-        val last = if (sp == null || cols.isEmpty() || area.isEmpty) -1 else lastFrom(cols.map { pxFor(widthOf(it), area) }, sp.first, area.width())
+        b.putInt(TilerProtocol.S_FIRST, if (hypr) 0 else sp?.first ?: 0)
+        val last = when {
+            sp == null || cols.isEmpty() || area.isEmpty -> -1
+            hypr -> cols.lastIndex
+            else -> TileMath.lastFrom(pxList(sp), sp.first, area.width(), gap)
+        }
         b.putInt(TilerProtocol.S_LAST, last)
         b.putInt(TilerProtocol.S_WS, current)
         b.putInt(TilerProtocol.S_WS_COUNT, spaces.size)
         b.putString(TilerProtocol.S_MESSAGE, message)
         b.putBoolean(TilerProtocol.S_ACTIVE, active)
+        b.putIntArray(TilerProtocol.S_RECTS, onScreen.flatMap { listOf(it.left, it.top, it.right, it.bottom) }.toIntArray())
+        b.putInt(TilerProtocol.S_RECT_FOCUS, onScreenFocus)
         b.putBinder(SettingsContract.KEY_TILER_BINDER, binder)
         try {
             app.contentResolver.call(Uri.parse(SettingsContract.URI), SettingsContract.METHOD_TILER_STATE, null, b)
@@ -522,7 +537,14 @@ internal object NiriTiler {
             Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { self, m, args ->
                 when (m.name) {
                     "onTaskRemoved" -> (args?.getOrNull(0) as? Int)?.let { id ->
-                        bg.post { safely { if (spaces.any { s -> s.cols.any { id in it.taskIds } }) { removeTasks(setOf(id)); if (active) applyLayout() else publish() } } }
+                        bg.post {
+                            safely {
+                                if (spaces.any { s -> s.cols.any { id in it.taskIds } }) {
+                                    removeTasks(setOf(id))
+                                    if (active) applyLayout() else publish()
+                                }
+                            }
+                        }
                     }
                     "onTaskFocusChanged" -> {
                         val id = args?.getOrNull(0) as? Int
@@ -541,12 +563,14 @@ internal object NiriTiler {
         if (Rx.tryCall(listeners, "registerTaskStackListener", proxy) != null) listening = true
     }
 
+    /** The user tapped a window: it is the focused one now (bar, borders). */
     private fun onFocused(taskId: Int) {
         if (!active) return
         val sp = spaces.getOrNull(current) ?: return
         val i = sp.cols.indexOfFirst { taskId in it.taskIds }
         if (i >= 0 && i != sp.focus) {
             sp.focus = i
+            onScreenFocus = shown.indexOf(taskId)
             publish()
         }
     }
@@ -564,7 +588,7 @@ internal object NiriTiler {
         try {
             block()
         } catch (t: Throwable) {
-            context?.let { Remote.report(it, "Режим niri: ошибка: " + t.stackTraceToString().take(700)) }
+            context?.let { Remote.report(it, "Живые окна: ошибка: " + t.stackTraceToString().take(700)) }
         }
     }
 }
