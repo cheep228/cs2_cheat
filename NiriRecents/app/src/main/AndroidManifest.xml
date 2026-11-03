@@ -34,6 +34,21 @@
             </intent-filter>
         </activity>
 
+        <!--
+            niri mode's desktop: the wallpaper behind the tiled app windows, plus the control bar.
+            The launcher starts it (so it is exported); it never shows up in Recents itself.
+        -->
+        <activity
+            android:name=".ui.NiriDesktopActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="Niri"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:taskAffinity="com.niri.recents.desktop"
+            android:theme="@style/Theme.NiriDesktop" />
+
         <!-- The hook inside the launcher reads settings and sends diagnostics through this. -->
         <provider
             android:name=".SettingsProvider"

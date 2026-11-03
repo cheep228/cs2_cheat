@@ -16,12 +16,15 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import com.niri.recents.overview.DemoData
+import com.niri.recents.overview.Md3Palette
 import com.niri.recents.overview.NiriOverviewView
 import com.niri.recents.overview.OvColumn
 import com.niri.recents.overview.OvWindow
 import com.niri.recents.overview.OvWorkspace
 import com.niri.recents.overview.OverviewStyle
 import com.niri.recents.shared.NiriSettings
+import com.niri.recents.shared.TilerProtocol
+import com.niri.recents.ui.NiriBarView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -147,6 +150,119 @@ class RenderTest {
     @Test
     fun manyWorkspaces() {
         render("niri-many.png", NiriSettings(), spaces(3, 1, 4, 2), 2, "k5")
+    }
+
+    @Test
+    fun materialDesign3() {
+        val v = view(NiriSettings(md3 = true, labels = true))
+        v.style = OverviewStyle(NiriSettings(md3 = true, labels = true), dm.density, Md3Palette.BASELINE)
+        v.wallpaper = wallpaper()
+        v.setData(spaces(3, 2), 1, "k4")
+        v.open(null)
+        v.snapAnimations()
+        shot(v, "niri-md3.png")
+        val plain = NiriSettings(md3 = true, labels = true, wallpaper = false, shadows = false)
+        val noWallpaper = view(plain)
+        noWallpaper.style = OverviewStyle(plain, dm.density, Md3Palette.BASELINE)
+        noWallpaper.setData(spaces(3, 2), 1, "k4")
+        noWallpaper.open(null)
+        noWallpaper.snapAnimations()
+        val out = shot(noWallpaper, "niri-md3-plain.png")
+        assertEquals(Md3Palette.BASELINE.surface, out.getPixel(1, 1))
+    }
+
+    @Test
+    fun pinchMakesWindowsSmaller() {
+        val v = view(userLook)
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(v, ViewGroup.LayoutParams(w, h))
+        shadowOf(Looper.getMainLooper()).idle()
+        var saved = 0f
+        v.host = object : NiriOverviewView.Host {
+            override fun onLaunch(column: OvColumn) = Unit
+            override fun onDismiss(column: OvColumn) = Unit
+            override fun onHome() = Unit
+            override fun onZoomChanged(zoom: Float) {
+                saved = zoom
+            }
+        }
+        v.setData(spaces(3, 3, 3, 3), 1, "k4")
+        v.open(null)
+        v.snapAnimations()
+        val t0 = SystemClock.uptimeMillis()
+        fun ev(action: Int, t: Long, spread: Float): MotionEvent {
+            val props = arrayOf(MotionEvent.PointerProperties().apply { id = 0 }, MotionEvent.PointerProperties().apply { id = 1 })
+            val coords = arrayOf(
+                MotionEvent.PointerCoords().apply { x = w / 2f; y = h / 2f - spread },
+                MotionEvent.PointerCoords().apply { x = w / 2f; y = h / 2f + spread },
+            )
+            return MotionEvent.obtain(t0, t, action, 2, props, coords, 0, 0, 1f, 1f, 0, 0, 0, 0)
+        }
+        v.dispatchTouchEvent(MotionEvent.obtain(t0, t0, MotionEvent.ACTION_DOWN, w / 2f, h / 2f - 300f, 0))
+        v.dispatchTouchEvent(ev(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), t0 + 10, 300f))
+        v.dispatchTouchEvent(ev(MotionEvent.ACTION_MOVE, t0 + 60, 200f))
+        v.dispatchTouchEvent(ev(MotionEvent.ACTION_MOVE, t0 + 120, 180f))
+        v.dispatchTouchEvent(ev(MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), t0 + 150, 180f))
+        v.dispatchTouchEvent(MotionEvent.obtain(t0, t0 + 160, MotionEvent.ACTION_UP, w / 2f, h / 2f - 180f, 0))
+        v.snapAnimations()
+        shot(v, "niri-pinched.png")
+        // 0.34 * 180 / 300
+        assertEquals(0.204f, saved, 0.01f)
+    }
+
+    /** What niri mode looks like: wallpaper, two live windows side by side, the control bar. */
+    @Test
+    fun tilingDesktopMock() {
+        val d = dm.density
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        val wp = wallpaper()
+        c.drawBitmap(wp, null, android.graphics.Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
+        val bar = NiriBarView(ctx)
+        bar.bottomInset = (24 * d).toInt()
+        bar.setLook(false, null, userLook.ringActive)
+        val state = android.os.Bundle().apply {
+            putStringArray(TilerProtocol.S_LABELS, arrayOf("Telegram", "YouTube", "Chrome", "Карты"))
+            putStringArray(TilerProtocol.S_PACKAGES, arrayOf("", "", "", ""))
+            putFloatArray(TilerProtocol.S_WIDTHS, floatArrayOf(0.5f, 0.5f, 2f / 3f, 0.5f))
+            putInt(TilerProtocol.S_FOCUS, 1)
+            putInt(TilerProtocol.S_FIRST, 0)
+            putInt(TilerProtocol.S_LAST, 1)
+            putInt(TilerProtocol.S_WS, 1)
+            putInt(TilerProtocol.S_WS_COUNT, 3)
+        }
+        bar.setState(state)
+        bar.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        bar.layout(0, h - bar.measuredHeight, w, h)
+        // Two half-width windows where the tiler would put them.
+        val top = (36 * d + 6 * d).toInt()
+        val bottom = h - (24 * d).toInt() - (TilerProtocol.BAR_DP * d).toInt()
+        val gap = (8 * d).toInt()
+        val edge = (6 * d).toInt()
+        val colW = ((w - 2 * edge) - gap) / 2
+        val apps = DemoData.syntheticApps()
+        val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3 * d
+            color = userLook.ringActive
+        }
+        for (k in 0..1) {
+            val l = edge + k * (colW + gap)
+            val win = DemoData.mockWindow(apps[k], colW, bottom - top, d, k)
+            val r = android.graphics.RectF(l.toFloat(), top.toFloat(), (l + colW).toFloat(), bottom.toFloat())
+            val path = android.graphics.Path().apply { addRoundRect(r, 16 * d, 16 * d, android.graphics.Path.Direction.CW) }
+            c.save()
+            c.clipPath(path)
+            c.drawBitmap(win, l.toFloat(), top.toFloat(), null)
+            c.restore()
+            if (k == 1) c.drawRoundRect(r, 16 * d, 16 * d, ring)
+        }
+        c.save()
+        c.translate(0f, (h - bar.measuredHeight).toFloat())
+        bar.draw(c)
+        c.restore()
+        val dir = File("build/preview").apply { mkdirs() }
+        File(dir, "niri-tiling.png").outputStream().use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
     @Test

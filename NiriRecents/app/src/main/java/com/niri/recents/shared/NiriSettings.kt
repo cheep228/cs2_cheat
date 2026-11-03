@@ -27,6 +27,14 @@ data class NiriSettings(
     val animSpeed: Float = 1f,
     /** Bumped by "reset workspaces"; the hook clears its saved layout when it changes. */
     val resetToken: Long = 0L,
+    /** Material Design 3 look: system (Material You) colours, MD3 shapes and chips. */
+    val md3: Boolean = false,
+    /** New apps start a new workspace after this many windows; 0 = never (pure niri). */
+    val perWorkspace: Int = 3,
+    /** Tapping a window opens its workspace as live windows side by side (niri tiling). */
+    val tiling: Boolean = false,
+    /** Width of a new column in tiling mode, as a fraction of the screen. */
+    val columnWidth: Float = 0.5f,
 ) {
     fun toBundle(): Bundle = Bundle().apply {
         putBoolean(K_ENABLED, enabled)
@@ -44,6 +52,10 @@ data class NiriSettings(
         putBoolean(K_LABELS, labels)
         putFloat(K_SPEED, animSpeed)
         putLong(K_RESET, resetToken)
+        putBoolean(K_MD3, md3)
+        putInt(K_PER_WS, perWorkspace)
+        putBoolean(K_TILING, tiling)
+        putFloat(K_COL_WIDTH, columnWidth)
     }
 
     companion object {
@@ -62,6 +74,10 @@ data class NiriSettings(
         private const val K_LABELS = "labels"
         private const val K_SPEED = "speed"
         private const val K_RESET = "reset"
+        private const val K_MD3 = "md3"
+        private const val K_PER_WS = "perWs"
+        private const val K_TILING = "tiling"
+        private const val K_COL_WIDTH = "colWidth"
 
         fun fromBundle(b: Bundle?): NiriSettings {
             val d = NiriSettings()
@@ -82,6 +98,10 @@ data class NiriSettings(
                 labels = b.getBoolean(K_LABELS, d.labels),
                 animSpeed = b.getFloat(K_SPEED, d.animSpeed),
                 resetToken = b.getLong(K_RESET, d.resetToken),
+                md3 = b.getBoolean(K_MD3, d.md3),
+                perWorkspace = b.getInt(K_PER_WS, d.perWorkspace),
+                tiling = b.getBoolean(K_TILING, d.tiling),
+                columnWidth = b.getFloat(K_COL_WIDTH, d.columnWidth),
             )
         }
     }
@@ -99,4 +119,50 @@ object SettingsContract {
 
     /** The real wallpaper, copied with root, served as a file. */
     const val WALLPAPER_URI = "$URI/wallpaper"
+
+    /** From the launcher: the user pinched the overview to this window size (arg = zoom). */
+    const val METHOD_SET_ZOOM = "setZoom"
+
+    /** From the launcher: what the tiling desktop shows now (extras), plus its command binder. */
+    const val METHOD_TILER_STATE = "tilerState"
+
+    /** In the "get" extras from the launcher: its tiling command binder. */
+    const val KEY_TILER_BINDER = "tilerBinder"
+}
+
+/** Tiling desktop protocol: commands the desktop sends to the launcher over a Binder. */
+object TilerProtocol {
+    const val DESCRIPTOR = "com.niri.recents.Tiler"
+
+    /** int left, top, right, bottom: where windows may go (screen coordinates). */
+    const val HELLO = 1
+    const val FOCUS = 2 // int column
+    const val SCROLL = 3 // int first visible column
+    const val WIDTH = 4 // cycle the focused column's width
+    const val CLOSE = 5 // close the focused app
+    const val MOVE = 6 // int -1 / +1: move the focused column left / right
+    const val MOVE_WS = 7 // int -1 / +1: move the focused column to the workspace above / below
+    const val WORKSPACE = 8 // int -1 / +1: switch workspace
+    const val OVERVIEW = 9 // open the niri overview
+    const val FULLSCREEN = 10 // open the focused app normally, full screen
+    const val HIDDEN = 11 // the desktop went out of sight
+    const val SHOWN = 12 // the desktop is back
+
+    // State keys (launcher -> app).
+    const val S_LABELS = "labels"
+    const val S_PACKAGES = "packages"
+    const val S_WIDTHS = "widths"
+    const val S_FOCUS = "focus"
+    const val S_FIRST = "first"
+    const val S_LAST = "last"
+    const val S_WS = "ws"
+    const val S_WS_COUNT = "wsCount"
+    const val S_MESSAGE = "message"
+    const val S_ACTIVE = "active"
+
+    /** Column width presets, as in niri's preset-column-widths. */
+    val WIDTHS = floatArrayOf(1f / 3f, 0.5f, 2f / 3f, 1f)
+
+    /** Height of the desktop's control bar, margins included (dp); windows stay above it. */
+    const val BAR_DP = 72
 }

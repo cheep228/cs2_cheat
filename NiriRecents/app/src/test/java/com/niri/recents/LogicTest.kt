@@ -82,6 +82,28 @@ class ArrangerTest {
     }
 
     @Test
+    fun manyAppsFillSeveralWorkspaces() {
+        val many = (1..8).map { ColumnKeyInfo("k$it", it.toLong()) }
+        val a = WorkspaceArranger.arrange(many, runningKey = "k8", saved = null, perWorkspace = 3)
+        assertEquals(
+            listOf(listOf("k1", "k2", "k3"), listOf("k4", "k5", "k6"), listOf("k7", "k8")),
+            a.workspaces.map { it.second },
+        )
+        assertEquals(2, a.activeIndex)
+        assertEquals("k8", a.focusKey)
+    }
+
+    @Test
+    fun aFullWorkspaceHandsOverToANewOneRightBelowIt() {
+        val saved = WsState(listOf(1, 2), mapOf(1 to listOf("a", "b"), 2 to listOf("c")), lastActive = 1, nextId = 3)
+        val a = WorkspaceArranger.arrange(
+            cols("a" to 1, "b" to 2, "c" to 3, "d" to 4, "e" to 5), runningKey = "e", saved = saved, perWorkspace = 2,
+        )
+        assertEquals(listOf(1 to listOf("a", "b"), 3 to listOf("d", "e"), 2 to listOf("c")), a.workspaces)
+        assertEquals(1, a.activeIndex)
+    }
+
+    @Test
     fun stateRoundTripsThroughJson() {
         val s = WsState(listOf(3, 1), mapOf(3 to listOf("12", "15+16"), 1 to listOf("7")), 3, 9)
         assertEquals(s, WsJson.decode(WsJson.encode(s)))

@@ -226,6 +226,13 @@ class RecentsBridge(val recentsView: View) {
         for (t in taskIds) Rx.call(amw, "removeTask", t)
     }
 
+    /** Puts the launcher into its Recents state (the overlay then shows on top). */
+    fun goToOverview() {
+        val sm = stateManager() ?: return
+        val state = launcherOverview ?: fallbackOverview ?: return
+        if (Rx.tryCall(sm, "goToState", state, true) == null) Rx.tryCall(sm, "goToState", state)
+    }
+
     fun goHome() {
         if (Rx.tryCall(recentsView, "startHome") != null) return
         try {

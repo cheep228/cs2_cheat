@@ -108,6 +108,9 @@ internal object Controllers {
 
     fun of(obj: Any?): OverlayController? = (obj as? View)?.let { map[it] }
 
+    /** The controller of an attached Recents, preferring one whose window is showing. */
+    fun any(): OverlayController? = map.entries.firstOrNull { it.key.isAttachedToWindow }?.value ?: map.values.firstOrNull()
+
     fun forView(obj: Any?): OverlayController? {
         val v = obj as? View ?: return null
         map[v]?.let { return it }

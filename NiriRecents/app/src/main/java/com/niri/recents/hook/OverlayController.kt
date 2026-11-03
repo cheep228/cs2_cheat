@@ -20,7 +20,9 @@ import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.graphics.RectF
 import com.niri.recents.overview.ColumnKeyInfo
+import com.niri.recents.overview.Md3Palette
 import com.niri.recents.overview.NiriOverviewView
 import com.niri.recents.overview.OverviewStyle
 import com.niri.recents.overview.OvColumn
@@ -82,7 +84,16 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
 
     /** Another app covered the launcher (a notification, an app opened from the shade...). */
     private val lifecycle = object : Application.ActivityLifecycleCallbacks {
-        override fun onActivityStopped(activity: Activity) = removeNow()
+        override fun onActivityStopped(activity: Activity) {
+            // An app we are opening covers the launcher: let the zoom-in finish (it has a timeout).
+            if (view?.phase == NiriOverviewView.Phase.LAUNCHING) {
+                launchDone = true
+                maybeFinishLaunch()
+            } else {
+                removeNow()
+            }
+        }
+
         override fun onActivityDestroyed(activity: Activity) = removeNow()
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
         override fun onActivityStarted(activity: Activity) = Unit
@@ -95,6 +106,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
     // ------------------------------------------------------------ lifecycle
 
     fun attach() {
+        NiriTiler.init(context, recentsView.javaClass.classLoader)
         Remote.refresh(context, force = true)
         attachStateListener()
         registerScreenOff()
@@ -251,6 +263,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
         }
         showRetries = 0
         val settings = Remote.cached ?: NiriSettings()
+        if (!settings.tiling) NiriTiler.release()
         if (!settings.enabled) return
         if (settings.resetToken != store.resetToken) {
             store.clear()
@@ -260,7 +273,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
         val data = bridge.columns()
         val running = data.firstOrNull { it.running }?.key
         val arrangement = WorkspaceArranger.arrange(
-            data.map { ColumnKeyInfo(it.key, it.lastActive) }, running, store.load(),
+            data.map { ColumnKeyInfo(it.key, it.lastActive) }, running, store.load(), settings.perWorkspace,
         )
         store.save(arrangement.state)
         val byKey = data.associateBy { it.key }
@@ -291,7 +304,7 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
         var lastError: Throwable? = null
         for (c in contexts) {
             val v = NiriOverviewView(c)
-            v.style = OverviewStyle(settings, c.resources.displayMetrics.density)
+            v.style = OverviewStyle(settings, c.resources.displayMetrics.density, Md3Palette.system(c))
             v.wallpaper = if (settings.wallpaper) cachedWallpaper else null
             v.host = this
             val wm = c.getSystemService(WindowManager::class.java) ?: continue
@@ -465,12 +478,41 @@ class OverlayController(private val recentsView: View) : NiriOverviewView.Host {
     override fun onLaunch(column: OvColumn) {
         launchDone = false
         visualDone = false
+        main.removeCallbacks(launchTimeout)
+        main.postDelayed(launchTimeout, 1_500)
+        val settings = Remote.cached ?: NiriSettings()
+        val v = view
+        if (settings.tiling && v != null) {
+            val spaces = v.workspacesSnapshot()
+            val ws = spaces.firstOrNull { column in it.columns }
+            if (ws != null && NiriTiler.enter(context, spaces, ws.id, column.key, settings)) {
+                // The windows are laid out by the tiler; the overlay only finishes its zoom.
+                store.setLastActive(ws.id)
+                launchDone = true
+                return
+            }
+        }
         bridge.launch(column.taskIds) {
             launchDone = true
             maybeFinishLaunch()
         }
-        main.removeCallbacks(launchTimeout)
-        main.postDelayed(launchTimeout, 1_500)
+    }
+
+    /** In niri mode the window zooms to its column instead of the whole screen. */
+    override fun launchBounds(column: OvColumn): RectF? {
+        val settings = Remote.cached ?: return null
+        if (!settings.tiling) return null
+        val v = view ?: return null
+        val spaces = v.workspacesSnapshot()
+        val ws = spaces.firstOrNull { column in it.columns } ?: return null
+        return NiriTiler.previewBounds(spaces, ws.id, column.key, settings)?.let { RectF(it) }
+    }
+
+    override fun onZoomChanged(zoom: Float) = Remote.setZoom(context, zoom)
+
+    /** Brings up Recents (used by the tiling desktop's overview button). */
+    fun openOverview() {
+        bridge.goToOverview()
     }
 
     override fun onLaunchVisualDone(column: OvColumn) {

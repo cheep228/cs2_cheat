@@ -30,10 +30,17 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** [NiriSettings] resolved to pixels. Every size is as seen on screen, in the overview. */
-class OverviewStyle(s: NiriSettings, val density: Float) {
+/**
+ * [NiriSettings] resolved to pixels. Every size is as seen on screen, in the overview.
+ * With MD3 on, colours come from [palette] (the system's Material You scheme) and shapes
+ * follow Material Design 3 (16 dp windows inside 28 dp workspaces, chips for names).
+ */
+class OverviewStyle(s: NiriSettings, val density: Float, palette: Md3Palette? = null) {
+    val md3 = s.md3
+    private val p = palette ?: Md3Palette.BASELINE
+
     /** Window size as a fraction of the screen. */
-    val zoom = s.zoom.coerceIn(0.2f, 0.6f)
+    val zoom = s.zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
 
     /** Between two windows, and between a window and the edge of its workspace. */
     val gap = s.gapsDp.coerceIn(0f, 48f) * density
@@ -43,16 +50,26 @@ class OverviewStyle(s: NiriSettings, val density: Float) {
     val margin = 10f * density
 
     /** Window corners; workspaces get matching (concentric) ones. */
-    val corner = s.cornerDp.coerceIn(0f, 64f) * density
+    val corner = (if (md3) 16f else s.cornerDp.coerceIn(0f, 64f)) * density
     val ring = s.ringWidthDp.coerceIn(0f, 16f) * density
-    val ringActive = s.ringActive
-    val ringInactive = s.ringInactive
-    val backdrop = s.backdrop or 0xFF000000.toInt()
-    val workspaceColor = s.workspaceColor or 0xFF000000.toInt()
+    val ringActive = if (md3) p.primary else s.ringActive
+    val ringInactive = if (md3) p.outlineVariant else s.ringInactive
+    val backdrop = if (md3) p.surface else s.backdrop or 0xFF000000.toInt()
+    val workspaceColor = if (md3) p.surfaceContainer else s.workspaceColor or 0xFF000000.toInt()
+    val chip = p.surfaceContainerHigh
+    val onChip = p.onSurface
+    val newSpace = p.primaryContainer
+    val onNewSpace = p.onPrimaryContainer
+    val muted = if (md3) p.onSurfaceVariant else 0xFFB0B0B0.toInt()
     val useWallpaper = s.wallpaper
     val shadows = s.shadows
     val labels = s.labels
     val speed = s.animSpeed.coerceIn(0.25f, 4f)
+
+    companion object {
+        const val MIN_ZOOM = 0.2f
+        const val MAX_ZOOM = 0.6f
+    }
 }
 
 /**
@@ -91,6 +108,12 @@ class NiriOverviewView(context: Context) : View(context) {
 
         /** Windows were moved between workspaces or closed. */
         fun onArrangementChanged(workspaces: List<OvWorkspace>, activeWorkspaceId: Int) {}
+
+        /** The user pinched the overview to a new window size. */
+        fun onZoomChanged(zoom: Float) {}
+
+        /** Where a tapped window ends up on screen, if not full screen (niri tiling mode). */
+        fun launchBounds(column: OvColumn): RectF? = null
     }
 
     enum class Phase { IDLE, OPEN, LAUNCHING, CLOSING }
@@ -99,16 +122,21 @@ class NiriOverviewView(context: Context) : View(context) {
     private data class Insert(val ws: Int, val slot: Int) : Drop
     private data class NewWorkspace(val after: Int) : Drop
 
-    private enum class Mode { NONE, PENDING, STRIP, SPACES, DISMISS, DRAG }
+    private enum class Mode { NONE, PENDING, STRIP, SPACES, DISMISS, DRAG, PINCH }
 
     var host: Host? = null
 
     var style = OverviewStyle(NiriSettings(), resources.displayMetrics.density)
         set(value) {
             field = value
+            zoomOverride = 0f
             needsSnap = true
             invalidate()
         }
+
+    /** Window size picked by pinching, until the style changes; 0 = the style's. */
+    private var zoomOverride = 0f
+    private val curZoom get() = if (zoomOverride > 0f) zoomOverride else style.zoom
 
     var wallpaper: Bitmap? = null
         set(value) {
@@ -127,6 +155,7 @@ class NiriOverviewView(context: Context) : View(context) {
     var fixedInsetBottom = 0f
 
     var emptyText = "Нет недавних приложений"
+    var newWorkspaceText = "Новый стол"
 
     var phase = Phase.IDLE
         private set
@@ -225,12 +254,12 @@ class NiriOverviewView(context: Context) : View(context) {
     private val dp get() = style.density
 
     /** A window is the screen, scaled down. */
-    private val winW get() = max(1f, w * style.zoom)
-    private val winH get() = max(1f, h * style.zoom)
+    private val winW get() = max(1f, w * curZoom)
+    private val winH get() = max(1f, h * curZoom)
 
     /** Inside a workspace, around its windows (room for the focus ring included). */
     private val pad get() = max(style.gap, style.ring + 3f * dp)
-    private val labelRoom get() = if (style.labels) 22f * dp else 0f
+    private val labelRoom get() = if (!style.labels) 0f else if (style.md3) 30f * dp else 22f * dp
     private val cardLeft get() = style.margin
     private val cardW get() = max(1f, w - 2f * style.margin)
     private val fullH get() = winH + 2f * pad + labelRoom
@@ -591,6 +620,16 @@ class NiriOverviewView(context: Context) : View(context) {
         val r = ws.rect
         val radius = radiusOf(r)
         val targeted = (drop as? Insert)?.ws == i
+        val newSpace = ws.columns.isEmpty() && (dragCol != null || workspaces.any { it.columns.isNotEmpty() })
+        if (style.md3 && newSpace && dragOrigin?.first != i) {
+            // MD3: the empty workspace is a tonal "new workspace" button.
+            fill.color = style.newSpace
+            fill.alpha = if (targeted) 255 else 215
+            c.drawRoundRect(r, radius, radius, fill)
+            if (targeted) outline(c, r, radius, style.ringActive)
+            drawNewSpaceLabel(c, r)
+            return
+        }
         val placeholder = ws.columns.isEmpty() && !targeted && dragOrigin?.first != i
         val a = if (placeholder) 0.42f else 1f
         if (style.shadows && !placeholder) {
@@ -619,11 +658,38 @@ class NiriOverviewView(context: Context) : View(context) {
         val top = firstTop() - scrollY.value + spacerRel
         tmpRect.set(cardLeft, top, cardLeft + cardW, top + emptyH)
         val radius = radiusOf(tmpRect)
+        if (style.md3) {
+            fill.color = style.newSpace
+            fill.alpha = 255
+            c.drawRoundRect(tmpRect, radius, radius, fill)
+            outline(c, tmpRect, radius, style.ringActive)
+            drawNewSpaceLabel(c, tmpRect)
+            return
+        }
         fill.color = style.ringActive
         fill.alpha = 38
         c.drawRoundRect(tmpRect, radius, radius, fill)
         outline(c, tmpRect, radius, style.ringActive)
         drawPlus(c, tmpRect.centerX(), tmpRect.centerY(), style.ringActive, 1f)
+    }
+
+    /** "+ Новый стол", centred: the MD3 new-workspace button's content. */
+    private fun drawNewSpaceLabel(c: Canvas, r: RectF) {
+        text.textSize = 14f * dp
+        text.textAlign = Paint.Align.LEFT
+        text.color = style.onNewSpace
+        text.alpha = 255
+        val label = newWorkspaceText
+        val arm = 7f * dp
+        val spacing = 8f * dp
+        val tw = text.measureText(label)
+        val total = 2f * arm + spacing + tw
+        val x0 = r.centerX() - total / 2f
+        line.strokeWidth = 2f * dp
+        line.color = style.onNewSpace
+        c.drawLine(x0, r.centerY(), x0 + 2f * arm, r.centerY(), line)
+        c.drawLine(x0 + arm, r.centerY() - arm, x0 + arm, r.centerY() + arm, line)
+        c.drawText(label, x0 + 2f * arm + spacing, r.centerY() - (text.descent() + text.ascent()) / 2f, text)
     }
 
     private fun outline(c: Canvas, r: RectF, radius: Float, color: Int) {
@@ -771,16 +837,28 @@ class NiriOverviewView(context: Context) : View(context) {
         if (label.isBlank()) return
         text.textSize = 12f * dp
         text.textAlign = Paint.Align.LEFT
-        text.color = 0xFFF0F0F0.toInt()
-        text.alpha = (255 * a).roundToInt()
-        text.setShadowLayer(3f * dp, 0f, 0.5f * dp, Color.argb((150 * a).roundToInt(), 0, 0, 0))
         val icon = col.windows.firstOrNull()?.icon
         val iconSize = 15f * dp
         val spacing = if (icon != null) 5f * dp else 0f
         val iconW = if (icon != null) iconSize + spacing else 0f
-        val shown = TextUtils.ellipsize(label, text, max(0f, right - left - iconW), TextUtils.TruncateAt.END).toString()
+        // MD3: an assist chip (surface container, rounded) instead of text on the wallpaper.
+        val chipPad = if (style.md3) 10f * dp else 0f
+        val shown = TextUtils.ellipsize(label, text, max(0f, right - left - iconW - 2f * chipPad), TextUtils.TruncateAt.END).toString()
         val total = iconW + text.measureText(shown)
         val cy = bottom + (pad + labelRoom) / 2f - 1f * dp
+        if (style.md3) {
+            val half = 13f * dp
+            tmpRect.set((left + right) / 2f - total / 2f - chipPad, cy - half, (left + right) / 2f + total / 2f + chipPad, cy + half)
+            fill.color = style.chip
+            fill.alpha = (240 * a).roundToInt()
+            c.drawRoundRect(tmpRect, half, half, fill)
+            text.color = style.onChip
+            text.alpha = (255 * a).roundToInt()
+        } else {
+            text.color = 0xFFF0F0F0.toInt()
+            text.alpha = (255 * a).roundToInt()
+            text.setShadowLayer(3f * dp, 0f, 0.5f * dp, Color.argb((150 * a).roundToInt(), 0, 0, 0))
+        }
         var x = (left + right) / 2f - total / 2f
         if (icon != null) {
             drawIcon(c, icon, x + iconSize / 2f, cy, iconSize, a)
@@ -809,7 +887,7 @@ class NiriOverviewView(context: Context) : View(context) {
         val ws = workspaces.lastOrNull() ?: return
         text.textSize = 14f * dp
         text.textAlign = Paint.Align.CENTER
-        text.color = 0xFFB0B0B0.toInt()
+        text.color = style.muted
         text.alpha = 255
         c.drawText(emptyText, ws.rect.centerX(), ws.rect.centerY() - (text.descent() + text.ascent()) / 2f, text)
     }
@@ -846,10 +924,14 @@ class NiriOverviewView(context: Context) : View(context) {
                 if (touchCol != null) postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
                 return true
             }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (e.pointerCount == 2 && mode != Mode.DRAG && mode != Mode.DISMISS) startPinch(e)
+            }
             MotionEvent.ACTION_MOVE -> {
                 velocity?.addMovement(e)
-                onMove(x, y)
+                if (mode == Mode.PINCH) updatePinch(e) else onMove(x, y)
             }
+            MotionEvent.ACTION_POINTER_UP -> if (mode == Mode.PINCH) endPinch()
             MotionEvent.ACTION_UP -> {
                 velocity?.addMovement(e)
                 finishGesture(x, y, cancelled = false)
@@ -857,6 +939,67 @@ class NiriOverviewView(context: Context) : View(context) {
             MotionEvent.ACTION_CANCEL -> finishGesture(x, y, cancelled = true)
         }
         return true
+    }
+
+    // ---------------------------------------------------------------- pinch zoom
+
+    private var pinchStartDist = 1f
+    private var pinchStartZoom = 0f
+    private var pinchRow = -1
+    private var pinchRowFrac = 0f
+    private var pinchColF = 0f
+
+    private fun pinchSpan(e: MotionEvent): Float =
+        max(1f, hypot(e.getX(1) - e.getX(0), e.getY(1) - e.getY(0)) / xS)
+
+    private fun pinchFocus(e: MotionEvent): Pair<Float, Float> =
+        ((e.getX(0) + e.getX(1)) / 2f - xTx) / xS to ((e.getY(0) + e.getY(1)) / 2f - xTy) / xS
+
+    /** Two fingers: windows get bigger or smaller, and what is under the fingers stays there. */
+    private fun startPinch(e: MotionEvent) {
+        removeCallbacks(longPress)
+        when (mode) {
+            Mode.STRIP -> stripWs?.let { it.viewX.animateTo(it.viewX.value.coerceIn(0f, maxViewX(it.columns.size))) }
+            Mode.SPACES -> scrollY.animateTo(scrollY.value.coerceIn(0f, maxScrollNow()))
+            else -> Unit
+        }
+        stripWs = null
+        touchCol = null
+        if (workspaces.isEmpty()) return
+        val (fx, fy) = pinchFocus(e)
+        pinchStartDist = pinchSpan(e)
+        pinchStartZoom = curZoom
+        pinchRow = workspaces.indexOfFirst { fy <= it.rect.bottom + style.wsGap / 2f }.let { if (it < 0) workspaces.lastIndex else it }
+        val ws = workspaces[pinchRow]
+        pinchRowFrac = ((fy - ws.rect.top) / max(1f, ws.rect.height())).coerceIn(-0.2f, 1.2f)
+        pinchColF = (fx - (stripStart(ws.columns.size) - ws.viewX.value)) / step
+        mode = Mode.PINCH
+    }
+
+    private fun updatePinch(e: MotionEvent) {
+        if (e.pointerCount < 2 || workspaces.isEmpty()) return
+        val (fx, fy) = pinchFocus(e)
+        val z = (pinchStartZoom * pinchSpan(e) / pinchStartDist).coerceIn(OverviewStyle.MIN_ZOOM, OverviewStyle.MAX_ZOOM)
+        val oldStep = step
+        zoomOverride = z
+        for ((i, ws) in workspaces.withIndex()) {
+            val n = ws.columns.size
+            val v = if (i == pinchRow) pinchColF * step - (fx - stripStart(n)) else ws.viewX.value * step / oldStep
+            ws.viewX.snapTo(v.coerceIn(0f, maxViewX(n)))
+        }
+        measureRows()
+        val ws = workspaces.getOrNull(pinchRow)
+        val maxS = maxScrollNow()
+        val want = if (ws == null || maxS <= 0f) 0f else areaTop + relTops[pinchRow] + pinchRowFrac * rowH(ws) - fy
+        scrollY.snapTo(want.coerceIn(0f, maxS))
+        invalidate()
+    }
+
+    private fun endPinch() {
+        // The finger left on the screen does nothing until it lifts too.
+        mode = Mode.NONE
+        host?.onZoomChanged(curZoom)
+        invalidate()
     }
 
     private fun onMove(x: Float, y: Float) {
@@ -895,7 +1038,7 @@ class NiriOverviewView(context: Context) : View(context) {
                 it.dismissY.snapTo(if (d < 0f) d else d * 0.2f)
             }
             Mode.DRAG -> updateDrag(x, y)
-            Mode.NONE -> Unit
+            Mode.NONE, Mode.PINCH -> Unit
         }
         invalidate()
     }
@@ -912,6 +1055,7 @@ class NiriOverviewView(context: Context) : View(context) {
             Mode.SPACES -> settleSpaces(vy)
             Mode.DISMISS -> touchCol?.let { settleDismiss(it, vy, cancelled) }
             Mode.DRAG -> if (cancelled) cancelDrag() else dropDragged()
+            Mode.PINCH -> endPinch()
             Mode.NONE -> Unit
         }
         mode = Mode.NONE
@@ -926,6 +1070,7 @@ class NiriOverviewView(context: Context) : View(context) {
         removeCallbacks(longPress)
         if (mode == Mode.DRAG) cancelDrag()
         if (mode == Mode.DISMISS) touchCol?.dismissY?.animateTo(0f)
+        if (mode == Mode.PINCH) host?.onZoomChanged(curZoom)
         mode = Mode.NONE
         stripWs = null
         touchCol = null
@@ -985,8 +1130,9 @@ class NiriOverviewView(context: Context) : View(context) {
         val a = max(1f, col.base.width())
         val shown = if (zoomCol === col && zoomP.value > 0.001f) a * xS / sceneScale.value else a
         zoomCol = col
-        zoomTarget.set(0f, 0f, w, h)
-        zoomP.snapTo(((shown - a) / max(1f, w - a)).coerceIn(0f, 1f))
+        val target = host?.launchBounds(col)
+        if (target != null && target.width() > 1f) zoomTarget.set(target) else zoomTarget.set(0f, 0f, w, h)
+        zoomP.snapTo(((shown - a) / max(1f, zoomTarget.width() - a)).coerceIn(0f, 1f))
         zoomP.animateTo(1f)
         notifyArrangement()
         host?.onLaunch(col)

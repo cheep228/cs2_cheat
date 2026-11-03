@@ -2,6 +2,7 @@ package com.niri.recents.hook
 
 import android.content.Context
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
@@ -42,7 +43,9 @@ internal object Remote {
         val app = context.applicationContext ?: context
         Bg.handler.post {
             try {
-                val b = app.contentResolver.call(uri, SettingsContract.METHOD_GET, null, null)
+                // Hands the tiling desktop its command channel at the same time.
+                val extras = Bundle().apply { putBinder(SettingsContract.KEY_TILER_BINDER, NiriTiler.binder) }
+                val b = app.contentResolver.call(uri, SettingsContract.METHOD_GET, null, extras)
                 if (b != null) {
                     cached = NiriSettings.fromBundle(b)
                     wallpaperStamp = b.getLong(SettingsContract.KEY_WALLPAPER_STAMP, 0L)
@@ -66,6 +69,19 @@ internal object Remote {
         }
     } catch (t: Throwable) {
         null
+    }
+
+    /** Saves a pinched window size in the settings app. */
+    fun setZoom(context: Context, zoom: Float) {
+        cached = cached?.copy(zoom = zoom)
+        val app = context.applicationContext ?: context
+        Bg.handler.post {
+            try {
+                app.contentResolver.call(uri, SettingsContract.METHOD_SET_ZOOM, zoom.toString(), null)
+            } catch (t: Throwable) {
+                // Settings app missing: the size lasts until the launcher restarts.
+            }
+        }
     }
 
     fun report(context: Context, message: String) {
@@ -140,8 +156,44 @@ internal class WorkspaceStore(context: Context) {
         }
     }
 
+    /** Tiling column widths (fraction of the screen) by column key. */
+    fun widths(): MutableMap<String, Float> = try {
+        val o = org.json.JSONObject(prefs?.getString(K_WIDTHS, null) ?: "{}")
+        o.keys().asSequence().associateWith { o.getDouble(it).toFloat() }.toMutableMap()
+    } catch (t: Throwable) {
+        mutableMapOf()
+    }
+
+    fun saveWidths(widths: Map<String, Float>) {
+        try {
+            val o = org.json.JSONObject()
+            for ((k, v) in widths) o.put(k, v.toDouble())
+            prefs?.edit()?.putString(K_WIDTHS, o.toString())?.apply()
+        } catch (t: Throwable) {
+            // Ignore.
+        }
+    }
+
+    /** Tasks the tiler turned into windows, so they can be given back even after a restart. */
+    fun tiledTasks(): Set<Int> = try {
+        prefs?.getString(K_TILED, null)?.split(',')?.mapNotNull { it.toIntOrNull() }?.toSet() ?: emptySet()
+    } catch (t: Throwable) {
+        emptySet()
+    }
+
+    fun saveTiledTasks(ids: Set<Int>) {
+        try {
+            prefs?.edit()?.putString(K_TILED, ids.joinToString(","))?.apply()
+        } catch (t: Throwable) {
+            // Ignore.
+        }
+    }
+
     private companion object {
-        const val K_STATE = "state"
+        // "state2": 1.3 lays new apps out over several workspaces; older layouts start over once.
+        const val K_STATE = "state2"
         const val K_RESET = "reset"
+        const val K_WIDTHS = "widths"
+        const val K_TILED = "tiled"
     }
 }

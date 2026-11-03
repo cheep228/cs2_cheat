@@ -29,12 +29,18 @@ data class Arrangement(
  *
  * - Columns keep the workspace and position the user gave them (niri never reorders windows).
  * - Tasks seen for the first time go to the end of the workspace the user was last in,
- *   the way a new niri window opens on the focused workspace.
+ *   the way a new niri window opens on the focused workspace. With [perWorkspace] > 0 a full
+ *   workspace hands over to a new one below it, so a phone's many apps fill several rows.
  * - Empty workspaces disappear; the view adds the always-empty one at the bottom itself.
  */
 object WorkspaceArranger {
 
-    fun arrange(columns: List<ColumnKeyInfo>, runningKey: String?, saved: WsState?): Arrangement {
+    fun arrange(
+        columns: List<ColumnKeyInfo>,
+        runningKey: String?,
+        saved: WsState?,
+        perWorkspace: Int = 0,
+    ): Arrangement {
         val byKey = columns.associateBy { it.key }
         var nextId = max(saved?.nextId ?: 1, (saved?.order?.maxOrNull() ?: 0) + 1)
         val order = ArrayList<Int>()
@@ -51,7 +57,7 @@ object WorkspaceArranger {
         val unknown = columns.sortedBy { it.lastActive }.map { it.key }.filter { it !in placed }
         if (unknown.isNotEmpty()) {
             val wanted = saved?.lastActive
-            val target = when {
+            var target = when {
                 wanted != null && members.containsKey(wanted) -> wanted
                 wanted != null && wanted > 0 -> {
                     // The user was on the empty workspace at the bottom: it becomes a real one.
@@ -70,7 +76,16 @@ object WorkspaceArranger {
                     id
                 }
             }
-            members.getValue(target).addAll(unknown)
+            for (key in unknown) {
+                if (perWorkspace > 0 && members.getValue(target).size >= perWorkspace) {
+                    // That workspace is full: the next app starts a new one right below it.
+                    val id = nextId++
+                    order.add(order.indexOf(target) + 1, id)
+                    members[id] = mutableListOf()
+                    target = id
+                }
+                members.getValue(target).add(key)
+            }
         }
 
         order.removeAll { members[it].isNullOrEmpty() }

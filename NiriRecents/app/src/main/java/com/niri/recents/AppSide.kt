@@ -21,6 +21,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /** Replaced with `true` by the module when Vector/LSPosed loads it into this app. */
 object ModuleStatus {
@@ -56,6 +57,10 @@ object SettingsStore {
             labels = p.getBoolean("labels", d.labels),
             animSpeed = p.getFloat("speed", d.animSpeed),
             resetToken = p.getLong("reset", d.resetToken),
+            md3 = p.getBoolean("md3", d.md3),
+            perWorkspace = p.getInt("perWs", d.perWorkspace),
+            tiling = p.getBoolean("tiling", d.tiling),
+            columnWidth = p.getFloat("colWidth", d.columnWidth),
         )
     }
 
@@ -77,6 +82,10 @@ object SettingsStore {
             .putBoolean("labels", s.labels)
             .putFloat("speed", s.animSpeed)
             .putLong("reset", s.resetToken)
+            .putBoolean("md3", s.md3)
+            .putInt("perWs", s.perWorkspace)
+            .putBoolean("tiling", s.tiling)
+            .putFloat("colWidth", s.columnWidth)
             .apply()
     }
 }
@@ -113,12 +122,29 @@ class SettingsProvider : ContentProvider() {
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val c = context ?: return null
         return when (method) {
-            SettingsContract.METHOD_GET -> SettingsStore.load(c).toBundle().apply {
-                val f = WallpaperSync.file(c)
-                putLong(SettingsContract.KEY_WALLPAPER_STAMP, if (f.exists()) f.lastModified() else 0L)
+            SettingsContract.METHOD_GET -> {
+                if (callerIsSystemApp(c)) TilerLink.offerBinder(extras?.getBinder(SettingsContract.KEY_TILER_BINDER))
+                SettingsStore.load(c).toBundle().apply {
+                    val f = WallpaperSync.file(c)
+                    putLong(SettingsContract.KEY_WALLPAPER_STAMP, if (f.exists()) f.lastModified() else 0L)
+                }
             }
             SettingsContract.METHOD_REPORT -> {
                 if (callerIsSystemApp(c) && arg != null) DiagStore.add(c, arg.take(1500))
+                null
+            }
+            SettingsContract.METHOD_SET_ZOOM -> {
+                val z = arg?.toFloatOrNull()
+                if (callerIsSystemApp(c) && z != null) {
+                    SettingsStore.save(c, SettingsStore.load(c).copy(zoom = (z * 100).roundToInt() / 100f))
+                }
+                null
+            }
+            SettingsContract.METHOD_TILER_STATE -> {
+                if (callerIsSystemApp(c) && extras != null) {
+                    TilerLink.offerBinder(extras.getBinder(SettingsContract.KEY_TILER_BINDER))
+                    TilerLink.update(Bundle(extras).apply { remove(SettingsContract.KEY_TILER_BINDER) })
+                }
                 null
             }
             else -> null

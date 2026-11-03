@@ -5,6 +5,16 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+    <!-- Like a home screen: the system draws the real wallpaper (live ones too) behind it. -->
+    <style name="Theme.NiriDesktop" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowShowWallpaper">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
     <color name="bg">#FF1A1A1A</color>
     <color name="launcher_bg">#FF262626</color>
 </resources>
