@@ -94,6 +94,38 @@ const LETHAL = new Set<number>([4 /*ILL*/, 6 /*ABRT*/, 7 /*BUS*/, 8 /*FPE*/, 9 /
   } catch (e) { akLog("preamble fatal: " + e); }
 })();
 
+// ===== МАСКИРОВКА ПОТОКОВ FRIDA =====
+// NXGATE сканит /proc/self/task/*/comm на имена gum-js-loop/gmain/gdbus/frida.
+// Переименовываем их в безобидные, сразу и по таймеру (новые потоки frida
+// создаются по ходу). Делаем это ДО загрузки NXGATE.
+const FRIDA_THREAD_RE = /gum|frida|gdbus|gmain|linjector|gadget|gjs|glib/i;
+function cloakThreads(): void {
+  try {
+    for (const t of Process.enumerateThreads()) {
+      const tid = t.id;
+      const p = "/proc/self/task/" + tid + "/comm";
+      let name = "";
+      try { name = (File as any).readAllText(p).trim(); } catch (_) { continue; }
+      if (name && FRIDA_THREAD_RE.test(name)) {
+        try {
+          (File as any).writeAllText(p, "Thread-" + (tid % 100000));
+          akLog("cloak tid " + tid + " '" + name + "'");
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+(function startCloak(): void {
+  try {
+    cloakThreads();
+    let n = 0;
+    const iv = setInterval(() => {
+      cloakThreads();
+      if (++n > 80) clearInterval(iv); // ~24 сек прикрытия на старте
+    }, 300);
+  } catch (e) { akLog("cloak start fail: " + e); }
+})();
+
 // ------------------------- НАСТРОЙКА ПОД ИГРУ -------------------------------
 interface FieldSpec { image: string; klass: string; field: string; static?: boolean; }
 const CONFIG: { money?: FieldSpec; intercept?: FieldSpec } = {
