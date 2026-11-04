@@ -94,36 +94,126 @@ const LETHAL = new Set<number>([4 /*ILL*/, 6 /*ABRT*/, 7 /*BUS*/, 8 /*FPE*/, 9 /
   } catch (e) { akLog("preamble fatal: " + e); }
 })();
 
-// ===== МАСКИРОВКА ПОТОКОВ FRIDA =====
-// NXGATE сканит /proc/self/task/*/comm на имена gum-js-loop/gmain/gdbus/frida.
-// Переименовываем их в безобидные, сразу и по таймеру (новые потоки frida
-// создаются по ходу). Делаем это ДО загрузки NXGATE.
-const FRIDA_THREAD_RE = /gum|frida|gdbus|gmain|linjector|gadget|gjs|glib/i;
-function cloakThreads(): void {
+// ===== АНТИ-ДЕТЕКТ: прячем следы из /proc (нативно) =====
+// NXGATE сканит /proc/self/maps (ищет наш gadget) и /proc/self/task/*/comm
+// (ищет имена потоков frida). Делаем:
+//  1) openat/open на /proc/self/maps -> подсовываем «чистую» копию без наших строк;
+//  2) переименовываем потоки frida в безобидные (нативным write в comm).
+const keepAlive: any[] = []; // держим ссылки на строки, чтобы GC их не собрал
+const MAPS_BAD = /libsecmon|\.cache\/lib|frida|gum|gadget|linjector|memfd:frida|\/libsec\//i;
+const COMM_BAD = /gum|frida|gdbus|gmain|linjector|gadget|pool-frida|gjs/i;
+
+(function procEvasion(): void {
   try {
-    for (const t of Process.enumerateThreads()) {
-      const tid = t.id;
-      const p = "/proc/self/task/" + tid + "/comm";
-      let name = "";
-      try { name = (File as any).readAllText(p).trim(); } catch (_) { continue; }
-      if (name && FRIDA_THREAD_RE.test(name)) {
-        try {
-          (File as any).writeAllText(p, "Thread-" + (tid % 100000));
-          akLog("cloak tid " + tid + " '" + name + "'");
-        } catch (_) {}
-      }
+    const myPid = Process.id;
+    const pOpen = akExport("libc.so", "open");
+    const pOpenat = akExport("libc.so", "openat");
+    const pRead = akExport("libc.so", "read");
+    const pClose = akExport("libc.so", "close");
+    const pWrite = akExport("libc.so", "write");
+    if (!pOpen || !pRead || !pClose || !pWrite) { akLog("proc evasion: no libc fns"); return; }
+    const fnOpen = new NativeFunction(pOpen, "int", ["pointer", "int", "int"]);
+    const fnRead = new NativeFunction(pRead, "long", ["int", "pointer", "ulong"]);
+    const fnClose = new NativeFunction(pClose, "int", ["int"]);
+    const fnWrite = new NativeFunction(pWrite, "long", ["int", "pointer", "ulong"]);
+    const toNum = (v: any): number => (typeof v === "number" ? v : (v && v.toNumber ? v.toNumber() : Number(v)));
+
+    function readAll(path: string): string | null {
+      try {
+        const pp = Memory.allocUtf8String(path);
+        const fd = toNum(fnOpen(pp, 0, 0)); // O_RDONLY
+        if (fd < 0) return null;
+        const sz = 65536;
+        const buf = Memory.alloc(sz);
+        let out = "";
+        let guard = 0;
+        while (guard++ < 2048) {
+          const n = toNum(fnRead(fd, buf, sz));
+          if (n <= 0) break;
+          out += buf.readUtf8String(n);
+        }
+        fnClose(fd);
+        return out;
+      } catch (_) { return null; }
     }
-  } catch (_) {}
-}
-(function startCloak(): void {
-  try {
-    cloakThreads();
-    let n = 0;
-    const iv = setInterval(() => {
-      cloakThreads();
-      if (++n > 80) clearInterval(iv); // ~24 сек прикрытия на старте
-    }, 300);
-  } catch (e) { akLog("cloak start fail: " + e); }
+
+    let ctr = 0;
+    function writeCleanMaps(): string | null {
+      const data = readAll("/proc/self/maps");
+      if (!data) return null;
+      const clean = data.split("\n").filter((l) => !MAPS_BAD.test(l)).join("\n");
+      try {
+        const path = "/data/data/com.JamesWest.NoomiClone/.cache/mp" + (ctr++ % 4);
+        const pp = Memory.allocUtf8String(path);
+        const fd = toNum(fnOpen(pp, 0x241, 0x1a4)); // O_WRONLY|O_CREAT|O_TRUNC, 0644
+        if (fd < 0) return null;
+        const cb = Memory.allocUtf8String(clean);
+        fnWrite(fd, cb, clean.length);
+        fnClose(fd);
+        return path;
+      } catch (_) { return null; }
+    }
+
+    function isMapsPath(p: string): boolean {
+      return p === "/proc/self/maps" || p === "/proc/" + myPid + "/maps" ||
+        /^\/proc\/self\/task\/\d+\/maps$/.test(p) || /^\/proc\/\d+\/maps$/.test(p);
+    }
+
+    // openat(dirfd, path, flags, mode): path = args[1]
+    if (pOpenat) {
+      Interceptor.attach(pOpenat, {
+        onEnter(args) {
+          try {
+            const p = args[1].readCString();
+            if (p && isMapsPath(p)) {
+              const clean = writeCleanMaps();
+              if (clean) { const s = Memory.allocUtf8String(clean); keepAlive.push(s); args[1] = s; akLog("maps->clean (openat)"); }
+            }
+          } catch (_) {}
+        },
+      });
+    }
+    // open(path, flags, mode): path = args[0]
+    Interceptor.attach(pOpen, {
+      onEnter(args) {
+        try {
+          const p = args[0].readCString();
+          if (p && isMapsPath(p)) {
+            const clean = writeCleanMaps();
+            if (clean) { const s = Memory.allocUtf8String(clean); keepAlive.push(s); args[0] = s; akLog("maps->clean (open)"); }
+          }
+        } catch (_) {}
+      },
+    });
+
+    // переименование потоков frida в comm
+    function renameThreads(): void {
+      try {
+        for (const t of Process.enumerateThreads()) {
+          const cp = "/proc/self/task/" + t.id + "/comm";
+          const nm = readAll(cp);
+          if (nm && COMM_BAD.test(nm)) {
+            try {
+              const pp = Memory.allocUtf8String(cp);
+              const fd = toNum(fnOpen(pp, 1, 0)); // O_WRONLY
+              if (fd >= 0) {
+                const nn = "Thread-" + (t.id % 100000);
+                const nb = Memory.allocUtf8String(nn);
+                fnWrite(fd, nb, nn.length);
+                fnClose(fd);
+                akLog("rename tid " + t.id);
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+    renameThreads();
+    let k = 0;
+    const iv = setInterval(() => { renameThreads(); if (++k > 80) clearInterval(iv); }, 300);
+
+    akLog("proc evasion installed");
+  } catch (e) { akLog("proc evasion fatal: " + e); }
 })();
 
 // ------------------------- НАСТРОЙКА ПОД ИГРУ -------------------------------
