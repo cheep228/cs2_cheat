@@ -11,5 +11,8 @@
     "@types/frida-gum": "^18.7.0",
     "frida-compile": "^19.1.0",
     "frida-il2cpp-bridge": "^0.14.0"
+  },
+  "dependencies": {
+    "frida-java-bridge": "^7.0.13"
   }
 }

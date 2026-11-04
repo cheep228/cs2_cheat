@@ -13,6 +13,7 @@
 //  чьё имя похоже на money/coin/... и логируют каждое — так найдём настоящее).
 // ============================================================================
 import "frida-il2cpp-bridge";
+import Java from "frida-java-bridge"; // в Frida 17 глобального Java нет — импортируем
 
 // ============================================================================
 //  АНТИ-KILL ПРЕАМБУЛА — выполняется СРАЗУ при загрузке gadget, до NXGATE.
@@ -28,44 +29,53 @@ function akLog(s: string): void {
 function akExport(mod: string, name: string): NativePointer | null {
   try { return Process.getModuleByName(mod).getExportByName(name); } catch { return null; }
 }
+// Смертельные сигналы, которые реально убивают/роняют процесс.
+// ВАЖНО: НЕ трогаем служебные сигналы ART (SIGQUIT=3, SIGURG=23, RT 34+),
+// иначе ломается рантайм и игра виснет чёрным экраном.
+const LETHAL = new Set<number>([4 /*ILL*/, 6 /*ABRT*/, 7 /*BUS*/, 8 /*FPE*/, 9 /*KILL*/, 11 /*SEGV*/, 31 /*SYS*/]);
+
 (function antiKill(): void {
   try {
     akLog("preamble start, pid=" + Process.id);
     const myPid = Process.id;
 
     // 1) exit / _exit / _Exit / quick_exit / abort -> no-op (вернуть управление)
+    const seen = new Set<string>();
     const voidExit: [string, string, string[]][] = [
       ["exit", "void", ["int"]],
       ["_exit", "void", ["int"]],
       ["_Exit", "void", ["int"]],
       ["quick_exit", "void", ["int"]],
-      ["exit_group", "void", ["int"]],
+      ["abort", "void", []],
     ];
     for (const [name, ret, args] of voidExit) {
       const p = akExport("libc.so", name);
-      if (p) {
-        try {
-          Interceptor.replace(p, new NativeCallback(function () {
-            akLog("blocked " + name);
-          }, ret as any, args as any));
-        } catch (e) { akLog("replace " + name + " fail: " + e); }
-      }
-    }
-    const abortP = akExport("libc.so", "abort");
-    if (abortP) {
-      try { Interceptor.replace(abortP, new NativeCallback(function () { akLog("blocked abort"); }, "void", [])); }
-      catch (e) { akLog("replace abort fail: " + e); }
+      if (!p) continue;
+      const key = p.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      try {
+        Interceptor.replace(p, new NativeCallback(function () { akLog("blocked " + name); }, ret as any, args as any));
+      } catch (e) { akLog("replace " + name + " fail: " + e); }
     }
 
-    // 2) kill / tgkill / pthread_kill / raise -> обнулить сигнал, если целимся в себя
+    // 2) kill / tgkill / pthread_kill / raise -> глушим ТОЛЬКО смертельные сигналы в себя
     const kill = akExport("libc.so", "kill");
-    if (kill) Interceptor.attach(kill, { onEnter(a) { const pid = a[0].toInt32(); if (pid === myPid || pid === 0 || pid === -1) { akLog("neutralize kill sig to self"); a[1] = ptr(0); } } });
+    if (kill) Interceptor.attach(kill, { onEnter(a) { const pid = a[0].toInt32(); const sig = a[1].toInt32(); if ((pid === myPid || pid === 0 || pid === -1) && LETHAL.has(sig)) { akLog("block kill sig " + sig); a[1] = ptr(0); } } });
     const tgkill = akExport("libc.so", "tgkill");
-    if (tgkill) Interceptor.attach(tgkill, { onEnter(a) { const tgid = a[0].toInt32(); if (tgid === myPid) { akLog("neutralize tgkill to self"); a[2] = ptr(0); } } });
+    if (tgkill) Interceptor.attach(tgkill, { onEnter(a) { const tgid = a[0].toInt32(); const sig = a[2].toInt32(); if (tgid === myPid && LETHAL.has(sig)) { akLog("block tgkill sig " + sig); a[2] = ptr(0); } } });
     const pthread_kill = akExport("libc.so", "pthread_kill");
-    if (pthread_kill) Interceptor.attach(pthread_kill, { onEnter(a) { akLog("neutralize pthread_kill"); a[1] = ptr(0); } });
+    if (pthread_kill) Interceptor.attach(pthread_kill, { onEnter(a) { const sig = a[1].toInt32(); if (LETHAL.has(sig)) { akLog("block pthread_kill sig " + sig); a[1] = ptr(0); } } });
     const raiseP = akExport("libc.so", "raise");
-    if (raiseP) { try { Interceptor.replace(raiseP, new NativeCallback(function () { akLog("blocked raise"); return 0; }, "int", ["int"])); } catch (_) {} }
+    if (raiseP) {
+      try {
+        const origRaise = new NativeFunction(raiseP, "int", ["int"]);
+        Interceptor.replace(raiseP, new NativeCallback(function (sig: number) {
+          if (LETHAL.has(sig)) { akLog("block raise sig " + sig); return 0; }
+          return origRaise(sig);
+        }, "int", ["int"]));
+      } catch (_) {}
+    }
 
     // 3) Java-пути выхода
     try {
