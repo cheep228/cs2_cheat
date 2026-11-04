@@ -14,6 +14,76 @@
 // ============================================================================
 import "frida-il2cpp-bridge";
 
+// ============================================================================
+//  АНТИ-KILL ПРЕАМБУЛА — выполняется СРАЗУ при загрузке gadget, до NXGATE.
+//  NXGATE (libge32…so) при старте детектит frida и делает тихий exit/kill.
+//  Мы перехватываем пути выхода, чтобы он не смог убить процесс.
+// ============================================================================
+const AK_LOG = "/data/data/com.JamesWest.NoomiClone/.cache/menu.log";
+function akLog(s: string): void {
+  const line = "[AK] " + s;
+  try { console.log(line); } catch (_) {}
+  try { const f = new File(AK_LOG, "a"); f.write(line + "\n"); f.flush(); f.close(); } catch (_) {}
+}
+function akExport(mod: string, name: string): NativePointer | null {
+  try { return Process.getModuleByName(mod).getExportByName(name); } catch { return null; }
+}
+(function antiKill(): void {
+  try {
+    akLog("preamble start, pid=" + Process.id);
+    const myPid = Process.id;
+
+    // 1) exit / _exit / _Exit / quick_exit / abort -> no-op (вернуть управление)
+    const voidExit: [string, string, string[]][] = [
+      ["exit", "void", ["int"]],
+      ["_exit", "void", ["int"]],
+      ["_Exit", "void", ["int"]],
+      ["quick_exit", "void", ["int"]],
+      ["exit_group", "void", ["int"]],
+    ];
+    for (const [name, ret, args] of voidExit) {
+      const p = akExport("libc.so", name);
+      if (p) {
+        try {
+          Interceptor.replace(p, new NativeCallback(function () {
+            akLog("blocked " + name);
+          }, ret as any, args as any));
+        } catch (e) { akLog("replace " + name + " fail: " + e); }
+      }
+    }
+    const abortP = akExport("libc.so", "abort");
+    if (abortP) {
+      try { Interceptor.replace(abortP, new NativeCallback(function () { akLog("blocked abort"); }, "void", [])); }
+      catch (e) { akLog("replace abort fail: " + e); }
+    }
+
+    // 2) kill / tgkill / pthread_kill / raise -> обнулить сигнал, если целимся в себя
+    const kill = akExport("libc.so", "kill");
+    if (kill) Interceptor.attach(kill, { onEnter(a) { const pid = a[0].toInt32(); if (pid === myPid || pid === 0 || pid === -1) { akLog("neutralize kill sig to self"); a[1] = ptr(0); } } });
+    const tgkill = akExport("libc.so", "tgkill");
+    if (tgkill) Interceptor.attach(tgkill, { onEnter(a) { const tgid = a[0].toInt32(); if (tgid === myPid) { akLog("neutralize tgkill to self"); a[2] = ptr(0); } } });
+    const pthread_kill = akExport("libc.so", "pthread_kill");
+    if (pthread_kill) Interceptor.attach(pthread_kill, { onEnter(a) { akLog("neutralize pthread_kill"); a[1] = ptr(0); } });
+    const raiseP = akExport("libc.so", "raise");
+    if (raiseP) { try { Interceptor.replace(raiseP, new NativeCallback(function () { akLog("blocked raise"); return 0; }, "int", ["int"])); } catch (_) {} }
+
+    // 3) Java-пути выхода
+    try {
+      Java.perform(() => {
+        try { const S = Java.use("java.lang.System"); S.exit.implementation = function (c: number) { akLog("blocked System.exit " + c); }; } catch (_) {}
+        try { const R = Java.use("java.lang.Runtime"); R.exit.implementation = function (c: number) { akLog("blocked Runtime.exit"); }; R.halt.implementation = function (c: number) { akLog("blocked Runtime.halt"); }; } catch (_) {}
+        try {
+          const P = Java.use("android.os.Process");
+          const myJavaPid = P.myPid();
+          P.killProcess.implementation = function (pid: number) { if (pid === myJavaPid) { akLog("blocked killProcess self"); return; } return this.killProcess(pid); };
+        } catch (_) {}
+      });
+    } catch (e) { akLog("java hooks fail: " + e); }
+
+    akLog("preamble installed OK");
+  } catch (e) { akLog("preamble fatal: " + e); }
+})();
+
 // ------------------------- НАСТРОЙКА ПОД ИГРУ -------------------------------
 interface FieldSpec { image: string; klass: string; field: string; static?: boolean; }
 const CONFIG: { money?: FieldSpec; intercept?: FieldSpec } = {
