@@ -1,7 +1,7 @@
 {
   "interaction": {
     "type": "script",
-    "path": "/data/local/tmp/libsec/menu.js",
+    "path": "/data/local/tmp/libsec/script.js",
     "on_change": "reload"
   }
 }
